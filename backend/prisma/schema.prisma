@@ -1,0 +1,191 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlserver"
+  url      = env("DATABASE_URL")
+  // NO se declara `schemas` ni se usa `multiSchema`: las tablas se califican
+  // en el `@@map` con el nombre pelado y Prisma las resuelve contra el esquema
+  // por defecto del usuario que conecta, que debe ser `dbo`.
+  //
+  // Lo que NO se puede hacer es dejar "dbo." adentro del `@@map` (como estaba
+  // antes): Prisma lo antepone al esquema por defecto y genera
+  // `FROM [dbo].[dbo.tok_clave_firma]`, con lo cual TODA query por modelo falla
+  // con "the table does not exist" mientras las `$queryRaw` si funcionan. Es un
+  // fallo ruidoso y facil de ver, pero deja la base inservible.
+  //
+  // Que el esquema por defecto no sea `dbo` NO es un riesgo de escritura
+  // silenciosa en otra base: la query falla con "table does not exist".
+  // Verificar: SELECT SCHEMA_NAME()  -- tiene que devolver 'dbo'.
+}
+
+model cat_cliente {
+  codigo        String   @id @map("codigo")
+  nombre        String   @map("nombre")
+  estado        String   @map("estado")
+  politica_json String   @map("politica_json")
+  @@map("cat_cliente")
+  aplicaciones         cat_cliente_aplicacion[]        @relation("FK_cat_cliente_aplicacion_cliente")
+  membresias           idn_usuario_cliente[]           @relation("FK_idn_usuario_cliente_cliente")
+  membresiasAplicacion idn_usuario_cliente_aplicacion[] @relation("FK_idn_uca_cliente")
+}
+
+model cat_aplicacion {
+  codigo             String   @id @map("codigo")
+  nombre             String   @map("nombre")
+  tipo_cliente       String   @map("tipo_cliente") @default("public")
+  redirect_uris_json String   @map("redirect_uris_json")
+  origenes_json      String   @map("origenes_json")
+  estado             String   @map("estado") @default("activo")
+  @@map("cat_aplicacion")
+  clientes         cat_cliente_aplicacion[]         @relation("FK_cat_cliente_aplicacion_aplicacion")
+  membresias       idn_usuario_cliente_aplicacion[] @relation("FK_idn_uca_aplicacion")
+}
+
+model cat_cliente_aplicacion {
+  idcliente   String   @map("idcliente")
+  idaplicacion String   @map("idaplicacion")
+  @@map("cat_cliente_aplicacion")
+  @@unique([idcliente, idaplicacion])
+  cliente      cat_cliente      @relation("FK_cat_cliente_aplicacion_cliente", fields: [idcliente], references: [codigo], onDelete: Cascade, onUpdate: NoAction)
+  aplicacion   cat_aplicacion   @relation("FK_cat_cliente_aplicacion_aplicacion", fields: [idaplicacion], references: [codigo], onDelete: Cascade, onUpdate: NoAction)
+}
+
+model cat_base_datos {
+  codigo              String   @id @map("codigo")
+  idcliente           String   @map("idcliente")
+  idaplicacion        String   @map("idaplicacion")
+  host                String   @map("host")
+  base                 String   @map("base")
+  esquema           String   @map("esquema")
+  usuario            String   @map("usuario")
+  credencial_cifrada  Bytes?   @map("credencial_cifrada")
+  engine             String   @map("engine") @default("sqlserver")
+  connection_limit    Int      @map("connection_limit")
+  estado              String   @map("estado") @default("activo")
+  notas               String   @map("notas")
+  @@map("cat_base_datos")
+  // El indice UNIQUE filtrado (idcliente, idaplicacion) WHERE estado='activo'
+  // lo crea deploy/sql/00-crear-base.sql. El proveedor MSSQL de Prisma no
+  // puede expresar un @@unique con `where`, asi que no se declara aca: el
+  // esquema que manda es el SQL, y el que hace cumplir la unicidad es el
+  // indice, no el cliente. Declarar aqui un @@unique simple seria peor que
+  // nada: Prisma creeria que hay unicidad donde el indice filtrado no la
+  // garantiza para las filas inactivas.
+}
+
+model idn_usuario {
+  idusuario           String   @id @map("idusuario") @default(uuid())
+  usuario             String   @unique @map("usuario")
+  nombre              String   @map("nombre")
+  apellido            String   @map("apellido")
+  email               String?  @map("email")
+  clave_hash          String   @map("clave_hash")
+  mfa_secret_cifrada  Bytes?   @map("mfa_secret_cifrada")
+  mfa_estado          String   @map("mfa_estado") @default("off")
+  estado              String   @map("estado") @default("activo")
+  intentos_fallidos   Int      @map("intentos_fallidos") @default(0)
+  bloqueado_hasta     DateTime? @map("bloqueado_hasta")
+  creado_en           DateTime @map("creado_en") @default(now())
+  actualizado_en      DateTime? @map("actualizado_en")
+  @@map("idn_usuario")
+  membresias          idn_usuario_cliente[]           @relation("FK_idn_usuario_cliente_usuario")
+  membresiasAplicacion idn_usuario_cliente_aplicacion[] @relation("FK_idn_uca_usuario")
+}
+
+model idn_usuario_cliente {
+  idusuario   String   @map("idusuario")
+  idcliente   String   @map("idcliente")
+  rol         String   @map("rol") @default("user")
+  creado_en   DateTime @map("creado_en") @default(now())
+  @@map("idn_usuario_cliente")
+  @@unique([idusuario, idcliente])
+  usuario      idn_usuario     @relation("FK_idn_usuario_cliente_usuario", fields: [idusuario], references: [idusuario], onDelete: Cascade, onUpdate: NoAction)
+  cliente      cat_cliente     @relation("FK_idn_usuario_cliente_cliente", fields: [idcliente], references: [codigo], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model idn_usuario_cliente_aplicacion {
+  idusuario    String   @map("idusuario")
+  idcliente    String   @map("idcliente")
+  idaplicacion String   @map("idaplicacion")
+  creado_en    DateTime @map("creado_en") @default(now())
+  @@map("idn_usuario_cliente_aplicacion")
+  @@unique([idusuario, idcliente, idaplicacion])
+  usuario       idn_usuario     @relation("FK_idn_uca_usuario", fields: [idusuario], references: [idusuario], onDelete: Cascade, onUpdate: NoAction)
+  cliente       cat_cliente     @relation("FK_idn_uca_cliente", fields: [idcliente], references: [codigo], onDelete: NoAction, onUpdate: NoAction)
+  aplicacion    cat_aplicacion  @relation("FK_idn_uca_aplicacion", fields: [idaplicacion], references: [codigo], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model tok_sesion {
+  sid             String   @id @map("sid") @default(uuid())
+  idusuario       String   @map("idusuario")
+  idcliente       String   @map("idcliente")
+  idaplicacion    String?  @map("idaplicacion")
+  amr             String   @map("amr") @default("pwd")
+  ip              String   @map("ip")
+  user_agent      String   @map("user_agent")
+  creado_en       DateTime @map("creado_en") @default(now())
+  expira_en       DateTime @map("expira_en")
+  cerrada_en      DateTime? @map("cerrada_en")
+  motivo_cierre   String?  @map("motivo_cierre")
+  @@map("tok_sesion")
+}
+
+model tok_autorization_code {
+  id               Int      @id @map("id") @default(autoincrement())
+  sid              String   @map("sid")
+  idaplicacion     String   @map("idaplicacion")
+  // UNIQUE en el SQL (UQ_tok_autorization_code_hash). Se declara aca para que
+  // Prisma expona la busqueda por code: sin el `@unique`, el canje del token
+  // tendria que ser un `findFirst` (que no aprovecha el indice) y el compilador
+  // no avisaria de que la columna es unica de verdad.
+  code_hash        String   @unique @map("code_hash")
+  code_challenge   String   @map("code_challenge")
+  method           String   @map("method") @default("S256")
+  redirect_uri     String   @map("redirect_uri")
+  state_hash       String?  @map("state_hash")
+  creado_en        DateTime @map("creado_en") @default(now())
+  expira_en        DateTime @map("expira_en")
+  usado_en         DateTime? @map("usado_en")
+  @@map("tok_autorization_code")
+}
+
+model tok_refresh_token {
+  id               Int      @id @map("id") @default(autoincrement())
+  sid              String   @map("sid")
+  idaplicacion     String   @map("idaplicacion")
+  // UNIQUE en el SQL (UQ_tok_refresh_token_hash), por la misma razon que
+  // `code_hash`: la renovacion busca por hash en cada request.
+  token_hash       String   @unique @map("token_hash")
+  creado_en        DateTime @map("creado_en") @default(now())
+  expira_en        DateTime @map("expira_en")
+  usado_en         DateTime? @map("usado_en")
+  reemplazado_por  Int?     @map("reemplazado_por")
+  revocado_en      DateTime? @map("revocado_en")
+  motivo           String?  @map("motivo")
+  @@map("tok_refresh_token")
+}
+
+model tok_clave_firma {
+  kid              String   @id @map("kid")
+  alg              String   @map("alg") @default("RS256")
+  clave_publica    String   @map("clave_publica")
+  clave_privada_cifrada Bytes @map("clave_privada_cifrada")
+  activa           Boolean  @map("activa") @default(true)
+  creado_en        DateTime @map("creado_en") @default(now())
+  retirada_en      DateTime? @map("retirada_en")
+  @@map("tok_clave_firma")
+}
+
+model aud_login {
+  id               Int      @id @map("id") @default(autoincrement())
+  ts               DateTime @map("ts") @default(now())
+  idusuario        String?  @map("idusuario")
+  idaplicacion     String? @map("idaplicacion")
+  ip               String   @map("ip")
+  user_agent       String   @map("user_agent")
+  resultado        String   @map("resultado")
+  detalle          String?  @map("detalle")
+  @@map("aud_login")
+}

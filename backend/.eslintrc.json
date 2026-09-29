@@ -1,0 +1,26 @@
+{
+  "parser": "@typescript-eslint/parser",
+  "parserOptions": {
+    "ecmaVersion": "latest",
+    "sourceType": "module"
+  },
+  "env": {
+    "node": true
+  },
+  "plugins": ["@typescript-eslint"],
+  "extends": ["eslint:recommended", "plugin:@typescript-eslint/recommended"],
+  "rules": {
+    // `no-undef` y `no-unused-vars` base no entienden TypeScript: marcan como
+    // no definido `NodeJS`/`Buffer` (que son tipos, no valores) y dan por
+    // "usada nunca" a la inyeccion por constructor de Nest
+    // (`private readonly x: X` se usa mediante `this.x`). El chequeo real lo
+    // hace `tsc`; estas reglas solo sumarian falsos positivos.
+    "no-undef": "off",
+    "no-unused-vars": "off",
+    "@typescript-eslint/no-unused-vars": [
+      "warn",
+      { "argsIgnorePattern": "^_", "varsIgnorePattern": "^_" }
+    ],
+    "no-console": "warn"
+  }
+}

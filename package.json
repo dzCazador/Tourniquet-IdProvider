@@ -1,0 +1,14 @@
+{
+  "name": "tourniquet",
+  "private": true,
+  "workspaces": ["backend", "frontend"],
+  "scripts": {
+    "lint": "npm run lint --workspaces",
+    "build": "npm run build --workspace backend",
+    "sql:dev": "node scripts/ejecutar-sql-dev.mjs",
+    "generar:clave": "node scripts/generar-clave.mjs",
+    "bootstrap:admin": "node scripts/bootstrap-admin.mjs",
+    "verificar:clave": "node scripts/verificar-clave.mjs",
+    "verificar:oidc": "node scripts/verificar-oidc.mjs"
+  }
+}
