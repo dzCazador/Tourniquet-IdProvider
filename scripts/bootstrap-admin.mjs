@@ -19,9 +19,8 @@
  *   npm run bootstrap:admin
  *   npm run bootstrap:admin -- --usuario admin --nombre Ana --apellido Perez
  */
-import readline from 'node:readline';
-import { Writable } from 'node:stream';
 import { cargar, prepararEntorno } from './lib/entorno.mjs';
+import { fallo, parsearFlags, preguntarSecreto, preguntarTexto } from './lib/consola.mjs';
 
 const { PrismaService } = cargar('prisma/prisma.service.js');
 const { FirmaService } = cargar('claves/firma.service.js');
@@ -31,109 +30,16 @@ const { AuditoriaService } = cargar('auth/auditoria.service.js');
 const { RateLimitService } = cargar('auth/rate-limit.service.js');
 const { validarPoliticaClave } = cargar('auth/politica-clave.js');
 
-// --- entrada por consola -------------------------------------------------------
+// --- flags ----------------------------------------------------------------------
+// El parseo vive en `lib/consola.mjs` desde la Fase 05: estaba aca porque era
+// el unico script con flags, y duplicarlo en `alta-usuario.mjs` y
+// `registrar-base.mjs` era copiar tambien la forma en que se rompe.
 
-/**
- * Pregunta sin eco. `readline` escribe el prompt y lo que el usuario escribe en
- * `output`; se le pasa un writable que se traga todo. Si la entrada no es
- * interactiva (pipe), no hay eco que tapar y se lee normal.
- */
-function preguntarSecreto(pregunta) {
-  if (!process.stdin.isTTY) {
-    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-    return new Promise((resolve) => rl.question(pregunta, (r) => { rl.close(); resolve(r.trim()); }));
-  }
-  const salidaMuda = new Writable({ write(_chunk, _enc, cb) { cb(); } });
-  const rl = readline.createInterface({ input: process.stdin, output: salidaMuda, terminal: true });
-  return new Promise((resolve) => {
-    rl.question(pregunta, (respuesta) => { rl.close(); resolve(respuesta.trim()); });
-  });
-}
-
-function preguntarTexto(pregunta, porDefecto) {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const sufijo = porDefecto ? ` [${porDefecto}]` : '';
-  return new Promise((resolve) => {
-    rl.question(`${pregunta}${sufijo}: `, (respuesta) => {
-      rl.close();
-      resolve((respuesta.trim() || porDefecto || ''));
-    });
-  });
-}
-
-/**
- * Flags con valor obligatorio. Se declara la lista en vez de asumir que todo
- * flag trae valor, porque asumirlo produjo un bug real: `--usuario admin`
- * (con espacio) se parseaba como la flag `usuario admin` y `flags.usuario`
- * quedaba con el string `"true"`, con lo cual se creaba un usuario
- * literalmente llamado "true". Un flag sin valor tiene que ser un error, nunca
- * un valor inventado.
- */
-const FLAGS_CON_VALOR = new Set(['usuario', 'nombre', 'apellido']);
-
-function parsearFlags(argv) {
-  const flags = {};
-
-  for (let i = 0; i < argv.length; i++) {
-    const arg = argv[i];
-    if (!arg.startsWith('--')) continue;
-
-    const cuerpo = arg.slice(2);
-    const igual = cuerpo.indexOf('=');
-
-    if (igual >= 0) {
-      flags[cuerpo.slice(0, igual)] = cuerpo.slice(igual + 1);
-      continue;
-    }
-
-    const siguiente = argv[i + 1];
-    if (FLAGS_CON_VALOR.has(cuerpo) && siguiente !== undefined && !siguiente.startsWith('--')) {
-      flags[cuerpo] = siguiente;
-      i++;
-      continue;
-    }
-
-    console.error(`\n  El flag --${cuerpo} necesita un valor.`);
-    console.error('  Uso:');
-    console.error('      npm run bootstrap:admin -- --usuario admin --nombre "Ana" --apellido "Perez"');
-    console.error('      (o la forma --usuario=admin)\n');
-    process.exit(1);
-  }
-
-  return flags;
-}
-
-// --- cuerpo --------------------------------------------------------------------
-
-const flags = parsearFlags(process.argv.slice(2));
+const USO = '      npm run bootstrap:admin -- --usuario admin --nombre "Ana" --apellido "Perez"';
+const flags = parsearFlags(process.argv.slice(2), ['usuario', 'nombre', 'apellido'], USO);
 
 console.log('\n  Tourniquet - bootstrap de administrador\n');
 console.log('  ' + '-'.repeat(64) + '\n');
-
-/**
- * Falla legible en vez del volcado de la libreria minificada de Prisma.
- *
- * No se imprime `DATABASE_URL`: puede traer usuario y clave, y una cadena de
- * conexion en un error es una credencial escrita en un log. Solo se menciona
- * el catalogo, que no es secreto y es justo lo que hay que revisar.
- */
-function fallo(error) {
-  const mensaje = error instanceof Error ? error.message : String(error);
-  const esConexion =
-    error?.constructor?.name === 'PrismaClientInitializationError' ||
-    /Can't reach database server|Initialization engine error|P1001|P1002/i.test(mensaje);
-
-  if (esConexion) {
-    const catalogo = (process.env.DATABASE_URL || '').match(/database=([^;]+)/i)?.[1] ?? '(sin definir)';
-    console.error('\n  No pude conectarme a la base de control.');
-    console.error(`  Catalogo apunta a: ${catalogo}`);
-    console.error('  Revisar que SQL Server este levantado y que .env tenga la cadena correcta.');
-    console.error('  Detalle: ' + mensaje.split('\n').filter(Boolean).slice(0, 3).join(' | ') + '\n');
-  } else {
-    console.error(`\n  ${mensaje}\n`);
-  }
-  process.exit(1);
-}
 
 /** Para poder cerrar la conexion desde el catch, que vive fuera de `ejecutar`. */
 let prismaInstancia = null;
@@ -142,7 +48,7 @@ try {
   await ejecutar();
 } catch (error) {
   await prismaInstancia?.$disconnect?.().catch(() => {});
-  fallo(error);
+  fallo(error, 'crear el administrador');
 }
 
 async function ejecutar() {

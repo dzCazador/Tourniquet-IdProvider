@@ -2,6 +2,7 @@ import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { SesionService, type Sesion } from '../oidc/sesion.service';
+import type { UsuarioSesion } from './identidad.service';
 import { clientIdDelReturnTo } from './return-to';
 
 /**
@@ -68,9 +69,14 @@ export class ErrorPortal extends Error {
   }
 }
 
-export interface ResumenCliente {
-  idcliente: string;
-  nombre: string;
+/**
+ * Membresia de un cliente tal como la ve el usuario: codigo, nombre y el rol
+ * que tiene **en ese cliente**. El rol viaja en la membresia y no en un
+ * "rol global", porque es por cliente: el mismo usuario puede ser
+ * `admin_identidad` en uno y `user` en otro.
+ */
+export interface ResumenMembresia extends ResumenCliente {
+  rol: string;
 }
 
 export interface EstadoSesion {
@@ -79,6 +85,29 @@ export interface EstadoSesion {
   clienteActual: ResumenCliente;
   /** Sesion del portal (la de la cookie), no la de ninguna app. */
   expira_en: string;
+}
+
+/**
+ * Todo lo que la cookie de sesion del portal autoriza, resuelto una vez.
+ *
+ * Es el unico contexto del que salen `idusuario` e `idcliente` para los
+ * endpoints de lectura (`GET /me`, `GET /me/apps`, `GET /registry/bases/:tenant`).
+ * Vive en un solo lugar a proposito: si cada endpoint releyera la cookie y
+ *buscara la sesion por su cuenta, cada uno tendria su propia version de "que
+ * cuenta como sesion viva" y un olvido en uno seria un endpoint que acepta una
+ * sesion cerrada.
+ *
+ * `rol` es el del usuario en `cliente`, o `null` si la membresia ya no existe
+ * (pasa cuando le dan de baja el cliente con la sesion abierta: la sesion
+ * sigue viva, el permiso ya no esta).
+ */
+export interface ContextoSesionPortal {
+  sesion: Sesion;
+  usuario: UsuarioSesion;
+  cliente: ResumenCliente;
+  rol: string | null;
+  /** Membresias activas del usuario. Solo las suyas: sale del filtro de membresias. */
+  membresias: ResumenMembresia[];
 }
 
 @Injectable()
@@ -98,14 +127,6 @@ export class PortalService {
     return this.issuer;
   }
 
-  /**
-   * De que cliente es la sesion que este login acaba de crear.
-   *
-   * El `tenant` de todo lo que sale de este login sale de aca, y hay tres
-   * caminos, del mas deterministico al mas conservador:
-   *
-   *   1. **Una sola membresia activa**: no hay nada que elegir. Es el caso del
-   *      primer administrador y del desarrollo.
   /**
    * De que cliente es la sesion que este login acaba de crear.
    *
@@ -219,6 +240,37 @@ export class PortalService {
    * deduce de nada que venga del cliente).
    */
   async estadoDe(sid: string | null): Promise<EstadoSesion | null> {
+    const ctx = await this.contextoDe(sid);
+    if (!ctx) {
+      return null;
+    }
+
+    return {
+      usuario: ctx.usuario.usuario,
+      nombre: `${ctx.usuario.nombre} ${ctx.usuario.apellido}`.trim(),
+      clienteActual: { idcliente: ctx.cliente.idcliente, nombre: ctx.cliente.nombre },
+      expira_en: ctx.sesion.expira_en.toISOString(),
+    };
+  }
+
+  /**
+   * Sesion viva + usuario + cliente de la sesion, en una sola consulta.
+   *
+   * Es lo que consumen `GET /me`, `GET /me/apps` y `GET /registry/bases/:tenant`
+   * (Fase 05). Las tres leen el mismo contexto y por eso lo leen de aca y no de
+   * la sesion directo: una version propia de "que cuenta como viva" en cada
+   * endpoint es una forma de que uno de ellos acepte una sesion cerrada.
+   *
+   * `null` en los mismos casos que `estadoDe`, y por el mismo motivo: no hay
+   * sesion, o la sesion quedo huerfana (el usuario o el cliente se dieron de
+   * baja despues del login). No se distingue el motivo.
+   *
+   * **`rol` y `membresias` se leen de la base en cada pedido, sin cache.** Un
+   * permiso cacheado es un permiso revocado que sigue sirviendo: dar de baja a
+   * alguien tiene que tener efecto en la proxima request, no en la proxima
+   * expiracion de cache.
+   */
+  async contextoDe(sid: string | null): Promise<ContextoSesionPortal | null> {
     if (!sid) {
       return null;
     }
@@ -228,14 +280,19 @@ export class PortalService {
       return null;
     }
 
-    const [usuario, cliente] = await Promise.all([
+    const [usuario, cliente, membresias] = await Promise.all([
       this.prisma.idn_usuario.findUnique({
         where: { idusuario: sesion.idusuario },
-        select: { usuario: true, nombre: true, apellido: true },
+        select: { idusuario: true, usuario: true, nombre: true, apellido: true, email: true },
       }),
       this.prisma.cat_cliente.findUnique({
         where: { codigo: sesion.idcliente },
         select: { codigo: true, nombre: true },
+      }),
+      this.prisma.idn_usuario_cliente.findMany({
+        where: { idusuario: sesion.idusuario, cliente: { estado: 'activo' } },
+        select: { idcliente: true, rol: true, cliente: { select: { nombre: true } } },
+        orderBy: { idcliente: 'asc' },
       }),
     ]);
 
@@ -246,10 +303,15 @@ export class PortalService {
     }
 
     return {
-      usuario: usuario.usuario,
-      nombre: `${usuario.nombre} ${usuario.apellido}`.trim(),
-      clienteActual: { idcliente: cliente.codigo, nombre: cliente.nombre },
-      expira_en: sesion.expira_en.toISOString(),
+      sesion,
+      usuario,
+      cliente: { idcliente: cliente.codigo, nombre: cliente.nombre },
+      rol: membresias.find((m) => m.idcliente === cliente.codigo)?.rol ?? null,
+      membresias: membresias.map((m) => ({
+        idcliente: m.idcliente,
+        nombre: m.cliente.nombre,
+        rol: m.rol,
+      })),
     };
   }
 

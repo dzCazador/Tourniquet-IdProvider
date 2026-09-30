@@ -1,6 +1,7 @@
 # Fase 05 — Registro demo: cliente, aplicación, base y alta de usuario
 
-**Estado:** ⬜ Pendiente
+**Estado:** ✅ **Completada y verificada** — 31 comprobaciones por HTTP y sobre la base, más
+3 en negativo. Detalle en *Estado de verificación*.
 **Depende de:** [04](fase-04-portal-login.md)
 **Repo:** Tourniquet
 **Requiere acción del usuario:** **sí** — correr la semilla de catálogo
@@ -8,6 +9,9 @@
 **Reversible:** sí, `DELETE` por código de cliente/app
 **Spec normativo:** `specs/02-base-de-datos.md` §3, §5; `specs/03-integracion-rhpro.md` §5
 **Mapa:** `specs/04-fases.md` Fase 01 (registro real) + Fase 02 (lado Tourniquet)
+**Sin cambios de esquema:** ni una tabla, ni una columna, ni un índice nuevo. El
+`credencial_cifrada` y el `usuario` de `cat_base_datos` ya existían desde la 01; acá
+lo que se hizo fue empezar a **escribirlos**.
 
 ---
 

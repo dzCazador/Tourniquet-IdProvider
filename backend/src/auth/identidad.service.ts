@@ -24,6 +24,18 @@ export const MENSAJE_RATE_LIMIT = 'Demasiados intentos. Reintente en un momento.
 
 const FORMATO_USUARIO = /^[a-z0-9._-]{3,50}$/;
 
+/**
+ * Roles de `idn_usuario_cliente.rol` (`specs/02` §3). Lista CERRADA: el rol
+ * decide si alguien entra al panel `admin_identidad` (Fase 08), asi que un
+ * valor inventado tiene que ser un error al escribir la fila y no un permiso
+ * que despues nadie sabe explicar.
+ *
+ * El rol es POR CLIENTE: el mismo usuario puede ser `admin_identidad` en uno y
+ * `user` en otro, y el token lleva el `tenant` que decide cual de los dos vale.
+ */
+export const ROLES = ['user', 'admin_identidad'] as const;
+export type RolCliente = (typeof ROLES)[number];
+
 export interface ContextoIntento {
   ip: string;
   userAgent: string;
@@ -230,6 +242,75 @@ export class IdentidadService {
     });
 
     return resultado.count;
+  }
+
+  /**
+   * Membresia de **un** cliente, idempotente. Devuelve si la creo.
+   *
+   * `crearMembresias` da de alta al usuario en TODOS los clientes activos, que
+   * es lo que necesita el bootstrap del primer admin y lo contrario de lo que
+   * necesita un usuario de prueba (`scripts/alta-usuario.mjs`): un usuario de un
+   * cliente, con un rol, en un solo lugar.
+   *
+   * El rol se valida contra la lista cerrada de `specs/02` §3. Sin esa
+   * validacion, `--rol admin` (en vez de `admin_identidad`) crearia una
+   * membresia que parece de administrador y no puede hacer nada: el fallo
+   * aparece semanas despues, cuando alguien pregunta por que el panel no abre.
+   */
+  async asegurarMembresia(
+    idusuario: string,
+    idcliente: string,
+    rol: string = 'user',
+  ): Promise<boolean> {
+    if (!ROLES.includes(rol as RolCliente)) {
+      throw new Error(`Rol invalido "${rol}". Valores validos: ${ROLES.join(', ')}.`);
+    }
+
+    const existente = await this.prisma.idn_usuario_cliente.findUnique({
+      where: { idusuario_idcliente: { idusuario, idcliente } },
+      select: { idcliente: true },
+    });
+    if (existente) {
+      return false;
+    }
+
+    await this.prisma.idn_usuario_cliente.create({
+      data: { idusuario, idcliente, rol, creado_en: new Date() },
+    });
+    return true;
+  }
+
+  /**
+   * Habilitacion de ingreso a **una** app de **un** cliente, idempotente.
+   *
+   * Es la fila que decide si el usuario puede entrar a la app (`specs/02` §3);
+   * `crearHabilitaciones` las da todas de una, que es el caso del bootstrap.
+   *
+   * Un usuario con membresia y sin esta fila puede loguearse al portal y ver
+   * la app en `/me/apps`... no: no la ve, porque `/me/apps` sale de esta misma
+   * tabla. Lo que puede es entrar al portal y no poder entrar a la app, que es
+   * justo el estado que la habilita. Por eso el criterio de aceptacion de la
+   * Fase 05 pide las dos cosas por separado.
+   */
+  async asegurarHabilitacion(
+    idusuario: string,
+    idcliente: string,
+    idaplicacion: string,
+  ): Promise<boolean> {
+    const existente = await this.prisma.idn_usuario_cliente_aplicacion.findUnique({
+      where: {
+        idusuario_idcliente_idaplicacion: { idusuario, idcliente, idaplicacion },
+      },
+      select: { idaplicacion: true },
+    });
+    if (existente) {
+      return false;
+    }
+
+    await this.prisma.idn_usuario_cliente_aplicacion.create({
+      data: { idusuario, idcliente, idaplicacion, creado_en: new Date() },
+    });
+    return true;
   }
 
   /**

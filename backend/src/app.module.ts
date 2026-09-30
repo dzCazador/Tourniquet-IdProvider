@@ -17,6 +17,7 @@ import { aud_loginModule } from './aud_login/aud_login.module';
 import { ClavesModule } from './claves/claves.module';
 import { AuthModule } from './auth/auth.module';
 import { OidcModule } from './oidc/oidc.module';
+import { RegistroModule } from './registro/registro.module';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { OidcModule } from './oidc/oidc.module';
     // resto ya este declarado cuando Nest resuelva las dependencias.
     PrismaModule,
     OidcModule,
+    RegistroModule,
   ],
 })
 export class AppModule {}

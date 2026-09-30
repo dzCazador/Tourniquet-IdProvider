@@ -85,6 +85,17 @@ const TTL_JWKS_INTERNO_MS = 60 * 1000;
       inject: [CARGAR_JWKS],
     },
   ],
-  exports: [SesionService, ValidadorService, JtiCacheService, JwksCacheService, AplicacionService],
+  exports: [
+    SesionService,
+    ValidadorService,
+    JtiCacheService,
+    JwksCacheService,
+    AplicacionService,
+    // `PortalService` se exporta para los endpoints de lectura del portal y del
+    // registro (`registro/`, Fase 05): son los que necesitan resolver la sesion
+    // a `idusuario` + `idcliente` + rol. Vive aci porque depende de
+    // `SesionService`, que es provider de este modulo.
+    PortalService,
+  ],
 })
 export class OidcModule {}
