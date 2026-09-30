@@ -1,4 +1,4 @@
-import { AA_NO_TEXTO, AA_TEXTO_NORMAL, contraste } from './contraste';
+import { AA_NO_TEXTO, AA_TEXTO_NORMAL, contraste, rgba } from './contraste';
 
 /**
  * Tokens del portal. FUENTE UNICA de valores: ningun componente escribe un hex
@@ -64,6 +64,26 @@ export const paresContrastados = {
     a: 'rgba(200,204,212,0.6)',
     b: color['tinta-alta'],
     minimo: AA_NO_TEXTO,
+  },
+  /**
+   * El fondo real del wordmark: el peor pixel de la zona donde se apoya, ya
+   * con la textura del §1.1 y el velo de `.fondo-login` compuestos.
+   *
+   * No es un token: es el valor **medido** pixel a pixel sobre el
+   * `fondo-login.jpg` que genera `scripts/generar-fondo.py`, y por eso lo
+   * declarado aca y el archivo generado estan calibrados el uno contra el otro.
+   * El umbral es 14 y no `AA_TEXTO_NORMAL` (4.5) a proposito: §2 regla 1 pone
+   * el texto de cuerpo en 14:1 y esa es la promesa que hay que sostener.
+   *
+   * **Si se cambia un `NIVEL_*` del generador o un stop del velo, hay que
+   * volver a medir y actualizar este numero.** El `auditarContraste()` solo mira
+   * que el par siga dando bien, no que la composicion siga siendo la misma, y
+   * las dos cosas pueden moverse sin que se toquen.
+   */
+  'hueso sobre el fondo real del wordmark': {
+    a: color.hueso,
+    b: '#0d0d0e',
+    minimo: 14,
   },
 } as const;
 
@@ -134,6 +154,38 @@ export const tipografia = {
   interfaz: 'var(--fuente-interfaz)',
   /** Tokens, `sub`/`aud`/`sid`, el inspector de la Fase 06. */
   codigo: 'var(--fuente-codigo)',
+} as const;
+
+/**
+ * Velo del fondo de `/login`: `tinta` con alfa, para el gradiente radial de
+ * `.fondo-login` (`globals.css`).
+ *
+ * Vive como token y no como `theme('colors.tinta/93')` en la hoja de estilos
+ * porque **`theme()` no inyecta alfa**: lee el valor crudo del token y descarta
+ * el modificador, y compila `theme('colors.tinta/93')` a `#0a0a0c` **opaco y
+ * sin avisar**. Con eso, el velo tapaba la imagen entera y el login volvia al
+ * plano de acero de antes con 62 KB de descarga. Ver `rgba()` en `contraste.ts`.
+ *
+ * Los cuatro numeros estan calibrados contra el peor pixel de la zona del
+ * wordmark, no puestos a ojo: con estos, `hueso` mide 15.08:1 atras del
+ * wordmark y 15.20:1 atras del subtitulo, contra los 14:1 que §2 regla 2 pide
+ * para texto de cuerpo. Si se cambia el generador de la textura hay que volver
+ * a medirlos.
+ */
+export const veloFondo = {
+  /** El centro de la columna del contenido: practicamente opaco. */
+  centro: rgba(color.tinta, 0.93),
+  /**
+   * La **meseta**, que es lo que hace funcionar el velo. No es un degradado
+   * desde el centro: el wordmark esta arriba del centro del gradiente, a un
+   * 42 % del radio, asi que con una rampa desde el origen el texto caeria
+   * justo en la parte que ya se esta aclarando. La meseta llega hasta el 68 %.
+   */
+  meseta: rgba(color.tinta, 0.91),
+  /** Donde la textura tiene que verse. */
+  margen: rgba(color.tinta, 0.4),
+  /** El borde de la pantalla, la textura abierta. */
+  borde: rgba(color.tinta, 0.3),
 } as const;
 
 /**

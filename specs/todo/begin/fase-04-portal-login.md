@@ -220,9 +220,15 @@ Esto deja el portal coherente desde el día uno y hace que la 07 sea Pintar enci
 
 ## Decisiones que tomó esta fase
 
-Las cinco son cosas que el enunciado de la fase dejaba abiertas. Todas se
+Las cinco primeras son cosas que el enunciado de la fase dejaba abiertas. Todas se
 resolvieron **sin cambiar ningún spec normativo** y quedó escrito por qué acá,
 que es donde se las vuelve a mirar.
+
+> **Las cuatro siguientes (6 a 9) llegaron después**, cuando la pantalla se usó en
+> pantallas de verdad. A diferencia de las cinco primeras, **una de ellas cambia un
+> spec normativo** — el punto 6 abre la excepción del fondo raster en
+> `estetica-tourniquet.md` §1.1 y §9.9 — y por eso quedó escrita en la spec
+> **antes** de tocar el código, que es el orden que pide `AGENTS.md` §Protocolo 2.
 
 ### 1. El tema entra en el marco, no en la función
 
@@ -315,6 +321,89 @@ el formulario se escriba en el HTML, pero Next **igual deja el archivo**
 estático responde 200 a un archivo que está. Sin el script, el criterio
 "en build de producción la ruta devuelve 404" sería falso por un detalle del
 hosting.
+
+### 6. El fondo del login pasa a ser un raster propio
+
+Es la **única** decisión de esta fase que cambia un spec normativo, y por eso
+está en `estetica-tourniquet.md` §1.1 como excepción escrita, no como nota.
+
+**Por qué:** con el fondo plano de la Fase 04 — dos gradientes radiales y la
+trama de peltre, cero KB de imagen — el login se veía bien y no comunicaba nada.
+Una pantalla de acceso a RRHH que no se distingue de cualquier otra es una
+pantalla de acceso a RRHH que no se recuerda, y el fondo es lo primero que ve el
+empleado. El problema no era el color: era que no había material.
+
+**Qué se mantiene y no se toca:** sigue siendo **un** raster en todo el portal,
+< 120 KB, generado por un script del repo, sin material del artista ni de la
+banda, sin requests a terceros y sin redimensionado en runtime. Los límites de
+§1.1 no se relajaron: se agregó **una** excepción con su propio límite duro, y el
+resto del portal (404, 500, lanzador) sigue siendo SVG + CSS.
+
+**El contraste es lo que hay que cuidar, y es donde casi se rompe.** La `Placa`
+del formulario es **opaca** (`bg-tinta-alta`), así que ningún texto del formulario
+—etiquetas, campos, botón, mensaje de error— queda jamás sobre la imagen. Lo
+único que se apoya directo en el fondo es el wordmark y el subtítulo. Por eso el
+velo `tinta` va en la **misma declaración CSS** que la imagen y no es una capa
+configurable: es lo que garantiza que `hueso` siga midiendo 14:1 sobre lo que
+se ve, en vez de 14:1 "sobre `tinta`" y lo que sea que haya atrás.
+
+**Lo que no se hizo, a propósito:** nada de `<Image>` ni de `srcset`. El build
+es `output: "export"` y un `srcset` obligaría a pregenerar variantes que nadie
+pidió; y una imagen de fondo no es contenido, así que va como
+`background-image` de CSS y no necesita `alt`.
+
+### 7. El login no entra en una pantalla de 768 px
+
+Medido: la pantalla ocupaba **~970 px de alto** con el selector de cliente
+apagado. Con el selector encendido se iba a ~1220 px. Es decir que en un
+notebook de 768 px —el equipo más probable de un turno de RRHH— había scroll
+siempre, y peor: el borde superior quedaba **inalcanzable**.
+
+**El bug de verdad no era el tamaño, era `justify-center`.** Con
+`min-h-screen` + `justify-center`, cuando el contenido es más alto que el
+contenedor el desborde se reparte arriba y abajo y la mitad de arriba se va
+fuera del área scrolleable. Se cambió al patrón `my-auto` sobre el wrapper
+interno: centra cuando hay lugar y scrollea desde arriba cuando no.
+
+Sobre eso, achicar el ritmo vertical: anillo 84 → 64 px, wordmark
+`text-4xl` → `text-3xl`, `Placa` de `py-10` → `py-8`, y los márgenes internos un
+paso para abajo. Encima de eso, una variante de **altura de viewport** que en
+pantallas de menos de 820 px esconde el subtítulo "Ingreso unico". La diferencia
+con una compactación fija es que en una pantalla alta **no cambia nada**: el
+login no se ve más chico de lo que ya era en un monitor de escritorio.
+
+**El texto de lectura no se tocó: 18 px es el piso de §3** y los dos avisos de
+privacidad son texto de lectura, no letra chica. Lo que se hizo con ellos es
+meterlos en un `<details open>`: en una pantalla alta sigue abierto y no se
+perde nada, y en una de 768 px el usuario lo colapsa con un toque. No se usaron
+`<details>` para esconder cosas que hay que leer sí o sí — el rate limit y el
+bloqueo con hora local siguen siendo texto plano y a la vista, que es lo que
+§7.1 pide.
+
+### 8. El selector de clientes va en rejilla con alto máximo
+
+Con una columna de botones de ancho completo, un admin que es miembro de diez
+clientes empuja el formulario fuera de la pantalla — y el admin es justamente el
+caso de uso real de este selector.
+
+La lista pasó a **rejilla de 1 columna en móvil y 2 desde `sm`, con
+`max-h` y scroll interno**. El orden de tabulación sigue siendo el del DOM, que
+es lo que la fase verificó: el foco va al primer botón y de ahí se sigue con Tab.
+El `overflow` no se come el anillo de foco porque el contenedor lleva `p-1 -m-1`
+—el mismo problema que ya estaba anotado en `globals.css`.
+
+En dos columnas una celda queda en ~168 px, así que el `código` del cliente pasó
+de al lado del nombre a **debajo**: "Cerveceria Cervi" y "cervi" en una línea de
+168 px no entran, y partir el nombre del cliente a la mitad en el paso donde la
+gente tiene que elegir a qué organización entra es peor que un renglón más.
+
+### 9. La placa sigue siendo el plano, no el contenedor
+
+Los dos avisos de privacidad se movieron **fuera** de la `Placa`. Dentro, la
+placa es el plano del formulario y nada más: cada cosa que se le mete adentro es
+un bloque más entre los dos campos y el botón, y el paso del login es escribir
+usuario, escribir clave, apretar Ingresar. El aviso va abajo, en el aire de la
+página, que es donde estaba la mitad de él igual.
 
 ---
 

@@ -17,6 +17,11 @@ out/
 # escribe un .tsbuildinfo junto al tsconfig, y no es un artefacto del repo.
 *.tsbuildinfo
 
+# Python: solo hay un script, `frontend/scripts/generar-fondo.py`, que genera
+# un archivo versionado. El `__pycache__` que deja es del interprete.
+__pycache__/
+*.pyc
+
 # Logs
 *.log
 logs/

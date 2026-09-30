@@ -41,7 +41,7 @@ Scaffold del repo (`backend/` Nest + `frontend/` portal Next vacío) y núcleo d
 Toque en dos repos: RHPro (guard dual + mapeo) y Tourniquet (registro real del cliente demo).
 
 - RHPro: `AUTH_MODO` + `JwtAuthGuard` dual (§2 `specs/03`), `/auth/exchange` en backend, callback
-  frontend, cookie de sesión propia; `user_per.idp_sub` (+SQL portable con permiso en
+  frontend, cookie de sesión propia; `user_per.idp_sub` (T-SQL de SQL Server, con permiso en
   `rhpro_marcelino`).
 - Tourniquet: registrar `cliente` demo (p. ej. `cervi`), `aplicacion rhpro`, `base_datos`
   `rhpro_marcelino` como inventario, y habilitar un usuario por SQL.
@@ -50,6 +50,9 @@ Toque en dos repos: RHPro (guard dual + mapeo) y Tourniquet (registro real del c
   menú/perfiles/permisos de RHPro sin cambios observables: mismo comportamiento que Fase 00 con
   la sesión originada en el portal; logout de app ≠ logout central, y "salir de todo" apaga las
   dos.
+- **Estado**: implementada y verificada (ver `specs/todo/begin/fase-06-rhpro-dual-guard.md`).
+  Login completo por navegador confirmado. Quedan para una fase posterior el **refresh silencioso**
+  y el **logout de app** contra `/oidc/revoke`, más `POST /auth/rotate-jwks`.
 
 ## Fase 03 — Portal lanzador + administración de accesos
 

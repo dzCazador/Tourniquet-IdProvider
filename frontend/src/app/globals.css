@@ -80,4 +80,100 @@
       linear-gradient(115deg, rgba(200, 204, 212, 0.022) 0%, transparent 42%),
       linear-gradient(295deg, rgba(122, 15, 22, 0.05) 0%, transparent 38%);
   }
+
+  /**
+   * Fondo del plano de login: el raster propio de §1.1.
+   *
+   * La imagen es `public/fondo-login.jpg`, generada por
+   * `scripts/generar-fondo.py`. Va como `background-image` de CSS y no como
+   * `<Image>` por dos razones del spec: el build es `output: "export"` y un
+   * `srcset` obligaria a pregenerar variantes que nadie pidio (§1.1), y una
+   * imagen de fondo no es contenido, asi que no necesita `alt`.
+   *
+   * **El velo va en la MISMA declaracion que la imagen, y no es opcional.** Es
+   * lo que sostiene la garantia de contraste, asi que separarlo en otra clase
+   * seria volverlo algo que alguien puede desactivar sin darse cuenta. De
+   * arriba hacia atras hay dos capas:
+   *
+   *   1. el **velo radial**: casi opaco en la columna del contenido y
+   *      transparente en los margenes;
+   *   2. la imagen, al fondo.
+   *
+   * El velo es la pieza que hace el trabajo de verdad, y la forma en que lo
+   * hace es esta: la imagen es una textura **pareja** —la misma banda de valor
+   * en toda la superficie— y el velo es lo que la **abre en los margenes y la
+   * cierra en el medio**. El wordmark y el subtitulo son lo unico que se apoya
+   * directamente en el fondo (la placa es opaca), y quedan sobre la parte
+   * oscura; la lamina de hierro se ve en los cuatro margenes, que es donde
+   * nadie tiene que leer nada. Es §2 regla 1 al pie de la letra: la atmosfera
+   * va **alrededor** de la pantalla, no debajo del texto.
+   *
+   * Se probo al reves —oscurecer el centro en la imagen y dejar el velo
+   * parejo— y son dos mecanismos compitiendo por la misma zona: la rampa de
+   * la mascara cruzaba justo por el subtitulo y lo dejaba en 13.26:1. El velo
+   * va mejor en CSS porque es donde se puede escribir en coordenadas de
+   * pantalla, sin adivinar el ancho del formulario.
+   *
+* Los numeros del velo salen de medir el peor pixel de la zona del wordmark,
+   * no de elegir un valor que se vea lindo. El gradiente tiene una **meseta**
+   * del 91-93 % que llega hasta el 68 % del radio, y no un degradado desde el
+   * centro: el wordmark esta *arriba* del centro del gradiente, a un 42 % del
+   * radio vertical, asi que con una rampa que arrancara en 0 el texto caeria
+   * justo en la parte que ya se esta aclarando. Medido sobre el JPG que se
+   * sirve, `hueso` da **15.08:1** atras del wordmark y **15.20:1** atras del
+   * subtitulo, contra los 14:1 que §2 regla 2 pide para texto de cuerpo. En los
+   * margenes el velo cae al 30 % y la textura llega a 27 de luminancia, que es
+   * donde tiene que verse.
+   *
+   * Para reproducir esas cifras: `python scripts/generar-fondo.py` y despues
+   * medir el peor pixel de la caja del wordmark contra el peor de la del
+   * subtitulo. Si se cambia un `NIVEL_*` del generador o un stop de este
+   * gradiente, hay que volver a medir: los dos estan calibrados el uno contra
+   * el otro y un cambio en cualquiera de los dos mueve el resultado.
+   *
+   * Y nada de esto le toca al contraste del formulario: la `Placa` es **opaca**
+   * (`bg-tinta-alta`), asi que etiquetas, campos, boton y mensaje de error
+   * nunca se apoyan sobre la imagen.
+   *
+   * **`background-size` va por capa y a proposito.** Sin el, un `cover` de una
+   * sola capa se aplica tambien a los gradientes y sus radios en `rem` dejan de
+   * significar lo que dicen. Los gradientes van en `100% 100%` (se estiran a la
+   * caja de posicion, sin escala) y solo la imagen va en `cover`.
+   *
+   * Y nada de `background-blend-mode`: se probo `overlay` y el resultado es un
+   * fondo **negro plano**, porque el modo multiplica la imagen (0.085) por el
+   * fondo oscuro (0.04) y da 0.007, o sea RGB 1. La textura desaparece entera y
+   * el login vuelve al plano de acero de antes, con 62 KB de descarga. Acá hace
+   * falta Source-over, y lo unico que tiene que hacer es aclarar la imagen
+   * hacia `tinta`.
+   */
+  .fondo-login {
+    background-color: theme('colors.tinta');
+    background-image:
+      radial-gradient(
+        34rem 46rem at 50% 45%,
+        theme('colors.velo.centro') 0%,
+        theme('colors.velo.meseta') 68%,
+        theme('colors.velo.margen') 88%,
+        theme('colors.velo.borde') 100%
+      ),
+      url('/fondo-login.jpg');
+    /*
+     * Los cuatro stops salen de `theme('colors.velo.*')`, NO de
+     * `theme('colors.tinta/93')`. Esa segunda forma **compila y no falla**: el
+     * modificador de opacidad se descarta en silencio y el gradiente sale
+     * `#0a0a0c` opaco en los cuatro stops, que es el fondo entero tapado por
+     * `tinta`. Pasó en esta misma fase: el build estaba en verde, el lint
+     * tambien, y el login se veía igual que antes de la imagen, con 62 KB de
+     * descarga. La unica forma de verlo era mirar el CSS compilado.
+     *
+     * Por eso el alfa viaja en el token (`veloFondo`, en `tokens.ts`) y no en
+     * el modificador. Si se cambia un stop, se cambia el token.
+     */
+    background-size:
+      100% 100%,
+      cover;
+    background-position: center;
+    background-repeat: no-repeat;
+  }
 }

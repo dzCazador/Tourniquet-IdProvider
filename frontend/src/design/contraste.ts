@@ -34,6 +34,25 @@ function canalesConAlfa(valor: string): [number, number, number, number] | null 
 }
 
 /**
+ * Convierte un token `#rrggbb` en `rgba(r,g,b,a)`.
+ *
+ * Existe por una trampa de Tailwind: `theme('colors.tinta/93')` **no** inyecta
+ * alfa. `theme()` lee el valor crudo del token y descarta el modificador, asi
+ * que el build compila `theme('colors.tinta/93')` a `#0a0a0c` opaco y sin
+ * avisar. Para que un token lleve alfa hay dos caminos, y este es el que se usa
+ * en el portal: el color se expone YA con alfa desde `tokens.ts`.
+ *
+ * El otro camino seria declarar la paleta como funciones con `<alpha-value>`,
+ * que es lo que hace el default de Tailwind. Acá no se puede: `color` se usa
+ * como valor plano en `variablesCss`, en `contraste()` y en el CSS compilado, y
+ * volverlo funciones rompe las tres.
+ */
+export function rgba(hex: string, alfa: number): string {
+  const [r, g, b] = canalesLineales(hex);
+  return `rgba(${r}, ${g}, ${b}, ${alfa})`;
+}
+
+/**
  * Compone un color con alfa sobre un fondo opaco.
  *
  * Hace falta porque la mitad de los bordes del portal son `plata/60`, y el

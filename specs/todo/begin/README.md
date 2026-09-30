@@ -17,13 +17,13 @@ verificadas — la 04 con 78 comprobaciones por HTTP, sobre la base de control, 
 
 | Fase | Título | Repo | SQL del usuario | Estado |
 |------|--------|------|:---------------:|--------|
-| [00](fase-00-login-local-rhpro.md) | Login local real contra `user_per` | RHPro | **Sí** | ⬜ Pendiente |
+| [00](fase-00-login-local-rhpro.md) | Login local real contra `user_per` | RHPro | **Sí** | 🟢 Verificada con dos usuarios reales; queda sólo el caso "menú vacío", que no se reproduce sin tocar `menuaccess` |
 | [01](fase-01-scaffold-control.md) | Scaffold del repo + base de control `cat_*` / `idn_*` / `tok_*` / `aud_*` | Tourniquet | **Sí** (prod) | ✅ Completada |
 | [02](fase-02-identidad-y-claves.md) | Identidad: argon2id, bootstrap, claves de firma, auditoría | Tourniquet | No | ✅ Completada y verificada |
 | [03](fase-03-nucleo-oidc.md) | Núcleo OIDC: discovery, JWKS, authorize, token, revoke, logout | Tourniquet | No | ✅ Completada y verificada |
 | [04](fase-04-portal-login.md) | Portal: login, tema gótico, callback decodificado | Tourniquet | No | ✅ Completada y verificada |
-| [05](fase-05-registro-demo.md) | Registro demo: cliente, app, base, alta de usuario | Tourniquet | **Sí** (semilla) | ⬜ Pendiente |
-| [06](fase-06-rhpro-dual-guard.md) | RHPro como relying party (guard dual + `idp_sub`) | RHPro | **Sí** | ⬜ Pendiente |
+| [05](fase-05-registro-demo.md) | Registro demo: cliente, app, base, alta de usuario | Tourniquet | **Sí** (semilla) | ✅ Completada y verificada |
+| [06](fase-06-rhpro-dual-guard.md) | RHPro como relying party (guard dual + `idp_sub`) | RHPro | **Sí** | ✅ Completada y verificada (backend + front, con `code` real y en navegador) |
 | [07](fase-07-portal-lanzador.md) | Portal lanzador: membresías y lista de apps | Tourniquet | No | ⬜ Pendiente |
 | [08](fase-08-admin-identidad.md) | Panel `admin_identidad` por cliente | Tourniquet | No | ⬜ Pendiente |
 | [09](fase-09-endurecimiento.md) | Endurecimiento: MFA, rotación, jobs, export de registro | Tourniquet | **Sí** (jobs) | ⬜ Pendiente |
@@ -163,10 +163,49 @@ Cada archivo sigue esta estructura, para que se puedan leer en cualquier orden:
 ## Lo que este plan NO cubre (y queda en `specs/00` §7)
 
 - MFA con segundo factor real → [09](fase-09-endurecimiento.md), diseño cerrado en `specs/01` §8.
-- Federación saliente (AD/Entra del cliente) → decisión pendiente, spec propio si se aprueba.
+- **Federación saliente (login con Google, Microsoft, Entra del cliente) → mejora a futuro, no
+  ahora.** Queda como candidata de la [09](fase-09-endurecimiento.md) **con condiciones**, y si se
+  aprueba necesita spec propio. Ver *Federación, si algún día* más abajo: por qué no aporta nada
+  hoy y qué habría que decidir antes de encenderla.
 - Auto-provisioning de `user_per` en RHPro → fuera de alcance hasta que un contrato lo pida.
 - Cliente *confidential* con `client_secret` (backend-a-backend) → no diseñado.
 - Multi-motor (MySQL) → **no existe** en este repo; SQL Server es el motor único.
+
+### Federación, si algún día
+
+Tourniquet **ya habla OIDC** (D1): es proveedor para RHPro, el portal y las apps. Eso no es lo mismo
+que aceptar cuentas de Google: sería Tourniquet como *broker*, y es otra pieza.
+
+Por qué no es prioridad:
+
+- **No aporta al caso que ya resuelve.** El login de RHPro no habla con Google: habla con Tourniquet
+  y, si Tourniquet cae, con su base local. Google sería un eslabón más en una cadena que ya
+  funciona.
+- **Agrega una dependencia externa que puede sacar gente del sistema.** D5 ("si Tourniquet no
+  responde, RHPro tiene que poder loguear") ya es la restricción más dura del diseño. Federar
+  multiplica esa superficie por cada proveedor externo que se sume, y un tercero puede caerse o
+  cambiar su API sin aviso.
+- **Google entra por detrás, nunca al lado de RHPro.** Por eso, si algún día se federase, el
+  fallback local de RHPro seguiría intacto: el proveedor externo no está en el camino crítico.
+
+Por qué **queda abierta** y no descartada:
+
+- El vínculo de RHPro es `user_per.idp_sub`, un **UUID de Tourniquet**, no un email ni un nombre. Ese
+  diseño ya es el que hace posible federar después sin tocar la base de negocio: el `sub` sigue
+  siendo "el UUID que Tourniquet le asignó a este operador", venga de donde venga la verificación.
+- D1 se eligió como OIDC estándar justamente para que esto no obligue a rediseñar nada.
+
+Antes de encenderla hay que decidir, por escrito:
+
+1. **¿Federar verifica o crea?** Sólo *verifica* una identidad que un administrador habilitó (igual
+   que hoy: alta manual, `idp_sub` en NULL hasta que se da de alta), o el proveedor puede crear
+   usuarios y tenants solo. La segunda opción abre la puerta que D2 explícitamente cierra.
+2. **¿MFA?** Un segundo factor que vive en Tourniquet no dice nada del que el proveedor ya
+   controló. Sin respuesta, federar es degradar la seguridad de las cuentas más sensibles.
+3. **¿Un `tenant` o varios?** Una misma persona puede tener cuentas en varios clientes. Con
+   federation el `tenant` deja de derivarse del `usuario` y hay que decidirlo explícitamente.
+4. **¿Y si el proveedor se cae?** Tiene que existir el mismo camino de hoy: el operador entra por
+   login local, con su `idp_sub` ya vinculado.
 
 ---
 

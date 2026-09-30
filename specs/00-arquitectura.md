@@ -111,7 +111,11 @@ salud de despliegue, que es un dominio distinto del de identidad.
 
 ## 7. Fuera de alcance (por ahora)
 - MFA con segundo factor real (esquelto de columna `mfa_secret`, activación Fase 04).
-- Federación saliente (login con cuenta Microsoft del cliente) — posible sobre D1, no diseñado.
+- Federación saliente (login con cuenta Microsoft o Google del cliente) — posible sobre D1, no
+  diseñada. Queda registrada como **mejora a futuro** en
+  `specs/todo/begin/README.md` § *Federación, si algún día*, con las cuatro decisiones que hay que
+  tomar antes de encenderla (verificar vs crear, MFA, `tenant` por usuario, y el fallback local).
+  El diseño de `idp_sub` en RHPro es lo que la deja abierta sin rediseñar nada.
 - **API de integración y auto-provisioning (decidido, NO implementado).** La dirección está
   tomada: se crea un usuario en Tourniquet, se le asignan sus apps, y eso dispara la creación
   del usuario en las APIs de esas apps, que pueden ser remotas (D7). Es provisionamiento

@@ -18,7 +18,18 @@ export function Placa({ children, className = '' }: { children: ReactNode; class
   return (
     <div className={`relative ${className}`}>
       <PlacaMarco aria-hidden />
-      <div className="relative rounded-placa bg-tinta-alta px-6 py-8 sm:px-10 sm:py-10">
+      {/*
+        El padding es compacto a proposito (`py-6 sm:py-8` y no `py-8
+        sm:py-10`): entre este padding, el encabezado y los avisos de abajo, la
+        pantalla de login daba ~1010 px de alto y no entraba en un monitor de
+        768, que es el equipo mas probable de un puesto de RRHH. El ajuste se
+        hace aca y no con un `max-h` en la pagina, que cortaria el formulario.
+
+        El `[@media(max-height:820px)]:py-5` son 12 px mas, y tambien se
+        ajustan por alto de pantalla y no por ancho: la pregunta es si entra en
+        la pantalla, no que tan angosta es.
+      */}
+      <div className="relative rounded-placa bg-tinta-alta px-5 py-6 [@media(max-height:820px)]:py-5 sm:px-8 sm:py-8">
         {children}
       </div>
     </div>

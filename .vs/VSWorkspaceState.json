@@ -1,7 +1,9 @@
 {
   "ExpandedNodes": [
+    "",
     "\\deploy",
     "\\deploy\\sql"
   ],
+  "SelectedNode": "\\deploy\\sql\\90-semilla-catalogo.sql",
   "PreviewInSolutionExplorer": false
 }

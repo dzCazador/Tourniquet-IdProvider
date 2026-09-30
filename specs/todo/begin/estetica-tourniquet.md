@@ -40,9 +40,28 @@ producto**):
 | Estética que vuelva **ilegible** o confusa una acción de identidad | Un login fallido a las 3 de la mañana, en un hospital, no admite adivinanzas |
 | Imagen de fondo pesada (> 120 KB) o redimensionada en runtime | El portal es `output: "export"`: todo se sirve como estático, en red de clientes |
 
-**Consecuencia práctica:** todo el material gráfico del tema es **SVG original o textura CSS**,
-generado en `frontend/src/design/`, con licencia del repo. Nada se descarga de internet ni se
-incluye con atribución a terceros.
+#### La excepción del fondo de `/login`: **un** raster propio
+
+> **Agregado en la Fase 04.** Antes de esto, el fondo del login era un plano de acero: dos
+> gradientes radiales y la trama de peltre, todo CSS, cero KB de imagen. Se veía bien y **no
+> comunicaba nada**: una pantalla de acceso a RRHH que no se diferencia de cualquier otra es una
+> pantalla de acceso a RRHH que no se recuerda. El fondo es la primera cosa que ve el empleado a
+> las 3 de la mañana y es la que lo separa de "una página más".
+
+Lo que este límite sigue significando, y que **no se negocia**:
+
+| Límite | Por qué sigue en pie |
+|---|---|
+| **Un solo raster en todo el portal**: el fondo de `/login` | Un tema rasterizado entero deja de ser un tema y pasa a ser un catálogo de fotos. El resto del portal sigue siendo SVG + CSS |
+| **< 120 KB**, generado por un script versionado del repo | El export es estático: el peso se lo descarga cada empleado en cada ingreso, sin caché que valga |
+| **Sin request a terceros, sin material del artista o de la banda** | §1.1 entero. El fondo es textura abstracta de metal, generada, no una imagen encontrada |
+| **Sin redimensionado en runtime**: `images.unoptimized` y CSS `background-image`, nunca `<Image>` | Un `<Image>` con `width`/`height` no se puede usar en un `background-image`, y un `srcset` en un export estático obliga a pregenerar variantes que nadie pidió |
+| **Siempre debajo de un velo `tinta`** | La imagen es decorativa y el texto del formulario va sobre una placa **opaca** (`tinta-alta`), así que no le toca nada. Lo único que se apoya directo en el fondo es el wordmark, y por eso el velo va en la **misma** declaración CSS que la imagen: no es una capa opcional ni configurable |
+
+**Consecuencia práctica:** el material gráfico del tema es **SVG original o textura CSS** generado
+en `frontend/src/design/`, con licencia del repo, **más el raster propio del fondo**, generado por
+`frontend/scripts/generar-fondo.py`. Nada se descarga de internet ni se incluye con atribución a
+terceros.
 
 ---
 
@@ -170,11 +189,18 @@ medir por eso.
 | `costura` | Línea punteada tipo pespunte, nudo central | Separadores de sección (`—✦—`) | 1 KB |
 | `malla` | Patrón de red de 24 px, opacidad 0.04 | Fondo del plano de login | 3 KB |
 | `grano` | Grano fino de película (filtro SVG `feTurbulence`) | Sobre `tinta`, opacidad 0.03 | 2 KB |
+| `fondo` | **Raster propio**: lámina de hierro (ruido multi-octava + vetas + viñeta), velada con `tinta` | Fondo de `/login` | **< 120 KB** [04] |
 | `sello` | Sello de lacre con `TQ` y el código del cliente | Estado "sesión sellada", apps habilitadas | 4 KB |
 | `mancha` | Tinta que se seca (radial-gradient) | Transición de carga del botón | CSS |
 
 Todos inline (sin request extra) o como `data:` URI en CSS. Presupuesto: **< 60 KB** de gráficos
 totales, medidos con `ls -l frontend/src/design/ornaments`.
+
+> El `fondo` es la **única excepción** al presupuesto y a la regla de "todo inline": es el único
+> archivo binario del tema, va aparte, y su límite es el de §1.1 (< 120 KB) y no este. La razón de
+> que sea un archivo y no un `data:` URI es que 100 KB en una hoja de estilos bloquean el primer
+> pintado de la pantalla de acceso; como imagen aparte, el navegador la pide en paralelo y el
+> texto aparece igual.
 
 ---
 
@@ -196,8 +222,8 @@ totales, medidos con `ls -l frontend/src/design/ornaments`.
 
 | Vista | Tono | Detalle |
 |---|---|---|
-| `/login` | **Alto** | Plano de login como "placa en una pared": wordmark con anillo, campo de usuario, campo de clave, botón. Fondo `malla`+`grano`. Abajo, aviso sobrio de privacidad y ayuda. **Sin** eslogan, sin lirismo, sin tips de la canción |
-| `/login` · selector de cliente | **Medio** | Cuando el usuario es miembro de varios clientes, el botón de ingresar **desaparece** y aparece la lista de clientes como botones, con el `código` al lado del nombre. No es un campo más del formulario: es otra pregunta, y por eso los campos de usuario y clave **no** se ponen en rojo — la clave ya fue verificada. Mismo patrón de placa del lanzador de la 07, en versión chica |
+| `/login` | **Alto** | Plano de login como "placa en una pared": wordmark con anillo, campo de usuario, campo de clave, botón. Fondo `fondo` (raster velado) con `malla`+`grano` encima. Abajo, aviso sobrio de privacidad y ayuda, plegable con `<details>` para que la pantalla entre en 768 px de alto. **Sin** eslogan, sin lirismo, sin tips de la canción |
+| `/login` · selector de cliente | **Medio** | Cuando el usuario es miembro de varios clientes, el botón de ingresar **desaparece** y aparece la lista de clientes como botones, con el `código` al lado del nombre. No es un campo más del formulario: es otra pregunta, y por eso los campos de usuario y clave **no** se ponen en rojo — la clave ya fue verificada. La lista va en **rejilla de 1→2 columnas con alto máximo y scroll interno**: el admin de una instalación es miembro de todos los clientes, y una columna con diez nombres empuja el formulario fuera de la pantalla. Mismo patrón de placa del lanzador de la 07, en versión chica |
 | `/consentimiento` (nuevo) | Alto en marco, sobrio en contenido | Título: "Aceptás el ingreso de **{app}**". Debajo, la **"rebanada"**: 3-4 renglones de hechos —qué es la app, qué recibe, quéNO recibe. Botón "Entrar". Acá la letra dice "you never believed in me": el portal muestra los hechos, no pide fe |
 | `/apps` (lanzador) | Medio-alto | Selector de cliente (si hay N), lista de apps en placas grabadas con su estado. Cada placa es un link de al authorize con deep-link |
 | `/apps/[codigo]` | Bajo | Pantalla de "puerta": cuenta regresiva de 5 s y botón "Entrar ahora" (evita el click-jacking trivial y da control). El token va a la cookie HttpOnly de la app |
@@ -254,7 +280,10 @@ Requisitos no negociables (si alguno falla, la vista no está lista):
 7. Navegación por teclado completa: login, consent, apps, cierre de sesión y 6 dígitos de MFA,
    con foco siempre visible.
 8. El gestor de contraseñas ofrece guardar la clave en `/login` (probado en Chrome y Firefox).
-9. Imágenes: 0 requests a terceros; 0 PNG/JPG del tema; sólo SVG inline y CSS.
+9. Imágenes: 0 requests a terceros; 0 PNG/JPG **de material ajeno**; sólo SVG inline y CSS, más
+   **un** raster propio (el fondo de `/login`, §1.1) generado por el script del repo. El presupuesto
+   de §1.1 es < 120 KB y se verifica con `python frontend/scripts/generar-fondo.py`, que **falla**
+   si el archivo que produce se pasa.
 10. Presupuesto de tema: < 60 KB de ornamentos, < 40 KB de fuentes auto-alojadas por peso usado
     (subconjunto latino).
 
@@ -281,6 +310,22 @@ frontend/src/design/
 │   └── Lamina.tsx        // lámina de 404/500                      [04]
 └── motion.ts             // duraciones y curvas; respeta prefers-reduced-motion [07]
 ```
+
+El fondo raster **no** va en `design/`: es un archivo servido, no un componente, y su generador es
+
+```
+frontend/
+├── public/
+│   └── fondo-login.jpg   // raster propio del fondo de /login, < 120 KB   [04]
+└── scripts/
+    ├── quitar-rutas-dev.mjs
+    └── generar-fondo.py  // Pillow: produce el .jpg de arriba. No entra al build
+```
+
+`generar-fondo.py` está en Python y **no** en `package.json` a propósito: el portal se construye con
+Node, y meterle una dependencia de Python al `pnpm build` para producir un archivo que ya está
+versionado no compra nada. El `.jpg` va commiteado y el script se corre solo cuando hay que cambiar
+la textura.
 
 `tokens.ts` es la **única** fuente de valores: ningún componente escribe hex sueltos
 (`grep -rn "#[0-9a-f]\{6\}" frontend/src/app` no debe matchear; los hex sólo en `tokens.ts` y en los

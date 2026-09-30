@@ -1,5 +1,5 @@
 import type { Config } from 'tailwindcss';
-import { color, espacio, foco, radio } from './src/design/tokens';
+import { color, espacio, foco, radio, veloFondo } from './src/design/tokens';
 
 /**
  * Tailwind no repite ningun valor: todo sale de `src/design/tokens.ts`.
@@ -18,7 +18,14 @@ import { color, espacio, foco, radio } from './src/design/tokens';
 const config: Config = {
   content: ['./src/**/*.{ts,tsx}'],
   theme: {
-    colors: { ...color },
+    /*
+     * `velo` son los tokens con alfa del fondo de login, y van anidados bajo su
+     * propio nombre para no mezclar cuatro `tinta`-con-alfa sueltos en la
+     * paleta: `theme('colors.velo.centro')` en la hoja de estilos, `bg-velo-
+     * centro` en el JSX. Se REGISTERAN con el alfa ya puesto porque `theme()`
+     * no sabe inyectarlo (ver `rgba()` en `contraste.ts`).
+     */
+    colors: { ...color, velo: { ...veloFondo } },
     extend: {
       spacing: espacio,
       borderRadius: {
