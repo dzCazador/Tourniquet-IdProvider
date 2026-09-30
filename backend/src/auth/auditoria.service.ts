@@ -62,6 +62,7 @@ export type CodigoDetalle =
   // vistazo una accion de administracion de un login en la lectura del panel.
   | 'admin_alta_usuario'
   | 'admin_edita_usuario'
+  | 'admin_desactiva_usuario'
   | 'admin_reset_clave'
   | 'admin_habilita_app'
   | 'admin_deshabilita_app'

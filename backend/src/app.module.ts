@@ -18,6 +18,7 @@ import { ClavesModule } from './claves/claves.module';
 import { AuthModule } from './auth/auth.module';
 import { OidcModule } from './oidc/oidc.module';
 import { RegistroModule } from './registro/registro.module';
+import { RegistroApiModule } from './registro-api/registro-api.module';
 
 @Module({
   imports: [
@@ -52,6 +53,9 @@ import { RegistroModule } from './registro/registro.module';
     PrismaModule,
     OidcModule,
     RegistroModule,
+    // Panel `admin_identidad` (Fase 08). Va aparte de `RegistroModule` porque es
+    // de escritura y de alcance por tenant: ver el comentario del modulo.
+    RegistroApiModule,
   ],
 })
 export class AppModule {}

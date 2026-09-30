@@ -498,4 +498,231 @@ async function leerErrorOidc(respuesta: Response): Promise<{ error: CodigoOidc }
   };
 }
 
+// --- El panel de administracion (fase 08) --------------------------------------
+
+/**
+ * Codigos del panel. Son los de `registro/errores.ts` mas los que agrega el
+ * `ValidationPipe` (400 de DTO), y se listan aparte de `CodigoPortal` porque el
+ * panel los muestra con textos distintos: un `no_encontrado` en el panel es "ese
+ * usuario no es de tu cliente", no "tu sesion vencio".
+ */
+export type CodigoAdmin =
+  | 'sesion_requerida'
+  | 'sin_permiso'
+  | 'no_encontrado'
+  | 'peticion_invalida'
+  | `peticion_invalida:${string}`
+  | 'conflicto'
+  | `conflicto:${string}`
+  | 'sesion_requerida_admin'
+  | 'sin_conexion'
+  | 'error';
+
+export class ErrorAdmin extends Error {
+  constructor(
+    readonly codigo: CodigoAdmin,
+    readonly status: number,
+    /** Cuerpo crudo, para cuando el codigo trae el detalle (`peticion_invalida:x`). */
+    readonly cuerpo: Record<string, unknown>,
+  ) {
+    super(codigo);
+    this.name = 'ErrorAdmin';
+  }
+}
+
+const CODIGOS_ADMIN: ReadonlySet<string> = new Set<string>([
+  'sesion_requerida',
+  'sin_permiso',
+  'no_encontrado',
+  'peticion_invalida',
+  'conflicto',
+  'sin_conexion',
+  'error',
+]);
+
+async function pedirAdmin(ruta: string, init: RequestInit = {}): Promise<Response> {
+  try {
+    return await fetch(`${API_URL}${ruta}`, {
+      cache: 'no-store',
+      ...init,
+      credentials: 'include',
+      headers: { Accept: 'application/json', ...(init.headers ?? {}) },
+    });
+  } catch (error) {
+    throw new ErrorAdmin('sin_conexion', 0, {
+      mensaje: error instanceof Error ? error.message : 'fallo de red',
+    });
+  }
+}
+
+async function aErrorAdmin(respuesta: Response): Promise<ErrorAdmin> {
+  let cuerpo: Record<string, unknown> = {};
+  try {
+    const parseado: unknown = await respuesta.json();
+    if (esRegistro(parseado)) {
+      cuerpo = parseado;
+    }
+  } catch {
+    // Sin JSON: manda el status.
+  }
+
+  const bruto = typeof cuerpo.codigo === 'string' ? cuerpo.codigo : '';
+  const codigo = (CODIGOS_ADMIN.has(bruto) ? bruto : 'error') as CodigoAdmin;
+  return new ErrorAdmin(codigo, respuesta.status, cuerpo);
+}
+
+async function pedirAdminJson<T>(ruta: string, init: RequestInit = {}): Promise<T> {
+  const respuesta = await pedirAdmin(ruta, init);
+  if (!respuesta.ok) {
+    throw await aErrorAdmin(respuesta);
+  }
+  return (await respuesta.json()) as T;
+}
+
+const postAdmin = (cuerpo: unknown) => ({
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(cuerpo),
+});
+
+export interface ResumenAdmin {
+  idcliente: string;
+  usuarios: number;
+  usuarios_activos: number;
+  usuarios_inactivos: number;
+  sesiones_abiertas: number;
+  eventos_24h: number;
+}
+
+export interface UsuarioAdmin {
+  idusuario: string;
+  usuario: string;
+  nombre: string;
+  apellido: string;
+  email: string | null;
+  estado: string;
+  apps: string[];
+  ultima_sesion: string | null;
+}
+
+export interface ListadoUsuarios {
+  total: number;
+  pagina: number;
+  por_pagina: number;
+  usuarios: UsuarioAdmin[];
+}
+
+export interface SesionAdminRow {
+  sid: string;
+  idusuario: string;
+  idcliente: string;
+  usuario: string;
+  nombre: string;
+  app: string;
+  idaplicacion: string | null;
+  es_portal: boolean;
+  ip: string;
+  user_agent: string;
+  amr: string;
+  creado_en: string;
+  expira_en: string;
+}
+
+export interface EventoAuditoria {
+  id: number;
+  ts: string;
+  usuario: string | null;
+  idusuario: string | null;
+  nombre: string | null;
+  idaplicacion: string | null;
+  resultado: string;
+  detalle: string | null;
+  codigo: string | null;
+  ip: string;
+  user_agent: string;
+  contexto: Record<string, string> | null;
+}
+
+export type MotivoCierre = 'soporte' | 'sospecha' | 'reemplazo' | 'solicitud_del_usuario' | 'otro';
+
+export const MOTIVOS_CIERRE: ReadonlyArray<{ valor: MotivoCierre; texto: string }> = [
+  { valor: 'soporte', texto: 'Soporte: se le pido cerrar la sesión' },
+  { valor: 'sospecha', texto: 'Sospecha de acceso indebido' },
+  { valor: 'reemplazo', texto: 'Reemplazo de equipo o de persona' },
+  { valor: 'solicitud_del_usuario', texto: 'El usuario lo pidió' },
+  { valor: 'otro', texto: 'Otro motivo' },
+];
+
+export const leerResumen = () => pedirAdminJson<ResumenAdmin>('/admin/resumen');
+
+export const listarUsuarios = (params: { q?: string; estado?: string; pagina?: number }) => {
+  const query = new URLSearchParams();
+  if (params.q) query.set('q', params.q);
+  if (params.estado && params.estado !== 'todos') query.set('estado', params.estado);
+  if (params.pagina) query.set('pagina', String(params.pagina));
+  const sufijo = query.toString();
+  return pedirAdminJson<ListadoUsuarios>(`/admin/usuarios${sufijo ? `?${sufijo}` : ''}`);
+};
+
+export const leerFicha = (id: string) => pedirAdminJson<UsuarioAdmin>(`/admin/usuarios/${id}`);
+
+export const listarAppsDisponibles = () =>
+  pedirAdminJson<{ total: number; apps: { codigo: string; nombre: string }[] }>('/admin/apps');
+
+export interface ResultadoAlta {
+  idusuario: string;
+  usuario: string;
+  compartido: boolean;
+  clave_temporal: string | null;
+  apps: string[];
+}
+
+export const altaUsuario = (dto: {
+  usuario: string;
+  nombre: string;
+  apellido: string;
+  email?: string;
+  aplicaciones: string[];
+  sobrescribirDatos?: boolean;
+}) => pedirAdminJson<ResultadoAlta>('/admin/usuarios', postAdmin(dto));
+
+export const editarUsuario = (
+  id: string,
+  dto: { nombre?: string; apellido?: string; email?: string; estado?: 'activo' | 'inactivo' },
+) => pedirAdminJson<UsuarioAdmin>(`/admin/usuarios/${id}`, { ...postAdmin(dto), method: 'PATCH' });
+
+export const resetearClave = (id: string) =>
+  pedirAdminJson<{ clave_temporal: string }>(`/admin/usuarios/${id}/reset-clave`, { method: 'POST' });
+
+export const habilitarApp = (id: string, app: string) =>
+  pedirAdminJson<{ apps: string[] }>(`/admin/usuarios/${id}/apps/${app}`, { method: 'PUT' });
+
+export const deshabilitarApp = (id: string, app: string) =>
+  pedirAdminJson<{ apps: string[] }>(`/admin/usuarios/${id}/apps/${app}`, { method: 'DELETE' });
+
+export const listarSesiones = (pagina?: number) =>
+  pedirAdminJson<{ total: number; pagina: number; por_pagina: number; sesiones: SesionAdminRow[] }>(
+    `/admin/sesiones${pagina ? `?pagina=${pagina}` : ''}`,
+  );
+
+export const cerrarSesionForzada = (sid: string, motivo: MotivoCierre) =>
+  pedirAdminJson<{ sid: string; motivo: MotivoCierre; usuario: string }>(
+    `/admin/sesiones/${sid}`,
+    { ...postAdmin({ motivo }), method: 'DELETE' },
+  );
+
+export const listarAuditoria = (params: { usuario?: string; resultado?: string; pagina?: number } = {}) => {
+  const query = new URLSearchParams();
+  if (params.usuario) query.set('usuario', params.usuario);
+  if (params.resultado) query.set('resultado', params.resultado);
+  if (params.pagina) query.set('pagina', String(params.pagina));
+  const sufijo = query.toString();
+  return pedirAdminJson<{
+    total: number;
+    pagina: number;
+    por_pagina: number;
+    eventos: EventoAuditoria[];
+  }>(`/admin/auditoria${sufijo ? `?${sufijo}` : ''}`);
+};
+
 export { API_URL };

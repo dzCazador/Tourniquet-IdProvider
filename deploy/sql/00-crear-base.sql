@@ -375,7 +375,13 @@ BEGIN
         expira_en       datetime2(3)     NOT NULL,
         -- Sin `actualizado_en`: es append-only con revocacion.
         cerrada_en      datetime2(3)     NULL,
-        motivo_cierre   nvarchar(20)     NULL,
+        -- nvarchar(30) y no 20: el motivo mas largo de la lista de abajo
+        -- (`solicitud_del_usuario`) mide 21 caracteres, y con 20 el INSERT de un
+        -- cierre del panel fallia con un error de longitud en tiempo de escritura.
+        -- El incremental `02-sesion-motivo-cierre-admin.sql` amplia la columna y
+        -- agrega los cinco motivos de una persona; el ancho y la lista se cambian
+        -- juntos y en el mismo archivo.
+        motivo_cierre   nvarchar(30)     NULL,
         CONSTRAINT PK_tok_sesion PRIMARY KEY (sid),
         CONSTRAINT FK_tok_sesion_usuario
             FOREIGN KEY (idusuario) REFERENCES dbo.idn_usuario (idusuario)
@@ -387,7 +393,15 @@ BEGIN
             FOREIGN KEY (idaplicacion) REFERENCES dbo.cat_aplicacion (codigo)
             ON DELETE NO ACTION ON UPDATE NO ACTION,
         CONSTRAINT CK_tok_sesion_motivo
-            CHECK (motivo_cierre IN (N'logout', N'revocada', N'replay', N'expirada'))
+            -- Los cuatro primeros los escribe el sistema. Los cinco del panel los
+            -- elige una PERSONA al forzar el cierre de la sesion de un usuario
+            -- (Fase 08 §5) y son obligatorios: un cierre sin explicacion es
+            -- indistinguible de un abuso. `motivo_cierre` es nvarchar(20) y
+            -- `solicitud_del_usuario` entra justo: si alguna vez se agrega un valor
+            -- mas largo, hay que hacer un ALTER del ancho Y del CHECK juntos.
+            CHECK (motivo_cierre IN (N'logout', N'revocada', N'replay', N'expirada',
+                                     N'soporte', N'sospecha', N'reemplazo',
+                                     N'solicitud_del_usuario', N'otro'))
     );
     PRINT N'-- Creada dbo.tok_sesion';
 END

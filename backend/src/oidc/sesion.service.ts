@@ -5,6 +5,30 @@ import { enDias, enHoras, REFRESH_TTL_DIAS, SESION_PORTAL_TTL_HORAS, SESION_TTL_
 
 export type MotivoCierre = 'logout' | 'revocada' | 'replay' | 'expirada';
 
+/**
+ * Motivos que elige **una persona** al forzar el cierre desde el panel de
+ * `admin_identidad` (Fase 08 §5).
+ *
+ * Son una lista distinta de `MotivoCierre` a proposito, y no un `string` mas: son
+ * los unicos cinco valores que el CHECK de `tok_sesion.motivo_cierre` acepta **por
+ * decision de una persona**, y el tipo es lo que obliga a que el DTO los valide y a
+ * que la escritura de la sesion no los mezcle con los tecnicos.
+ */
+export const MOTIVOS_ADMIN = [
+  'soporte',
+  'sospecha',
+  'reemplazo',
+  'solicitud_del_usuario',
+  'otro',
+] as const;
+
+export type MotivoAdmin = (typeof MOTIVOS_ADMIN)[number];
+
+/** `true` si el motivo lo eligio una persona (y no el sistema). */
+export function esMotivoAdmin(motivo: string): motivo is MotivoAdmin {
+  return (MOTIVOS_ADMIN as readonly string[]).includes(motivo);
+}
+
 export type Sesion = {
   sid: string;
   idusuario: string;
@@ -253,15 +277,24 @@ export class SesionService {
    *
    * Idempotente a proposito: cerrar dos veces no es un error, es lo que pasa
    * cuando el usuario aprieta logout y la app tambien manda su `/oidc/revoke`.
+   *
+   * **Los motivos de una persona no describen un refresh.** Cuando el motivo es
+   * del panel (`sospecha`, `soporte`, …), la familia se revoca con `revocada` y el
+   * motivo humano queda solo en `tok_sesion.motivo_cierre` y en `aud_login`. Es
+   * tambien una necesidad del esquema: `tok_refresh_token.motivo` tiene su propia
+   * lista cerrada, sin los cinco del panel, y escribir ahi un valor de persona
+   * reventaria el CHECK en el momento de revocar — o sea, en el peor momento, con
+   * la sesion a medio cerrar.
    */
-  async cerrar(sid: string, motivo: MotivoCierre): Promise<boolean> {
+  async cerrar(sid: string, motivo: MotivoCierre | MotivoAdmin): Promise<boolean> {
     const sesion = await this.porSid(sid);
     if (!sesion) {
       return false;
     }
 
     const ahora = new Date();
-    const familias = await this.revocarFamilia(sid, motivo, ahora);
+    const motivoFamilia: MotivoCierre = esMotivoAdmin(motivo) ? 'revocada' : motivo;
+    const familias = await this.revocarFamilia(sid, motivoFamilia, ahora);
 
     if (sesion.cerrada_en !== null) {
       return false;

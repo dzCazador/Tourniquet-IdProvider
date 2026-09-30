@@ -527,6 +527,14 @@ async function panelDeIdentidad(usuario, ajeno, cerrar, otroCliente) {
   const sufijo = Date.now().toString(36).slice(-6);
   const nuevoUsuario = `verif${sufijo}`;
 
+  // Un `:id` que no es UUID tiene que dar 400 y no 500: es un pedido mal formado,
+  // y un 500 en el panel hace pensar que el panel esta roto.
+  const idBasura = await pedir('/admin/usuarios/no-es-un-uuid', admin);
+  verificar('un :id que no es UUID → 400 (no 500 del motor)', idBasura.status === 400,
+    `HTTP ${idBasura.status}`);
+
+  // 201 y no 200: lo que se crea es la membresía (y a veces el usuario). El codigo
+  // lo pone el controlador con `@HttpCode(201)`.
   const alta = await pedir('/admin/usuarios', jsonPost({
     usuario: nuevoUsuario,
     nombre: 'Alta',
@@ -535,7 +543,7 @@ async function panelDeIdentidad(usuario, ajeno, cerrar, otroCliente) {
     aplicaciones: [APP],
     claveTemporal: true,
   }, admin));
-  verificar('alta de usuario → 200', alta.status === 200, `HTTP ${alta.status} ${alta.json?.codigo ?? ''}`);
+  verificar('alta de usuario → 201', alta.status === 201, `HTTP ${alta.status} ${alta.json?.codigo ?? ''}`);
   const claveTemporal = alta.json?.clave_temporal ?? null;
   verificar('el alta devuelve la clave temporal UNA vez',
     typeof claveTemporal === 'string' && claveTemporal.length >= 16,
@@ -544,6 +552,7 @@ async function panelDeIdentidad(usuario, ajeno, cerrar, otroCliente) {
   const filaAlta = await prisma.idn_usuario.findUnique({
     where: { usuario: nuevoUsuario },
     select: {
+      idusuario: true,
       usuario: true,
       clave_hash: true,
       membresias: { select: { idcliente: true, rol: true } },
@@ -664,11 +673,16 @@ async function panelDeIdentidad(usuario, ajeno, cerrar, otroCliente) {
   verificar('cierre forzado SIN motivo → 400',
     sinMotivo.status === 400, `HTTP ${sinMotivo.status} ${sinMotivo.json?.codigo ?? ''}`);
 
-  const motivoInvalido = await pedir(`/admin/sesiones/${victima.sid}`, jsonPost({ motivo: 'porque-si' }, admin));
+  // `jsonPost` trae `method: 'POST'` porque asi se usa en los endpoints de alta, y
+  // el cierre forzado es un DELETE con cuerpo: hay que volver a poner el verbo o la
+  // ruta no existe y el 404 dice "Cannot DELETE" (que es lo que paso la primera vez).
+  const cerrarCon = (cuerpo) => ({ ...jsonPost(cuerpo, admin), method: 'DELETE' });
+
+  const motivoInvalido = await pedir(`/admin/sesiones/${victima.sid}`, cerrarCon({ motivo: 'porque-si' }));
   verificar('cierre forzado con un motivo fuera de la lista → 400',
     motivoInvalido.status === 400, `HTTP ${motivoInvalido.status}`);
 
-  const cierreForzado = await pedir(`/admin/sesiones/${victima.sid}`, jsonPost({ motivo: 'sospecha' }, admin));
+  const cierreForzado = await pedir(`/admin/sesiones/${victima.sid}`, cerrarCon({ motivo: 'sospecha' }));
   verificar('cierre forzado con motivo → 200', cierreForzado.status === 200, `HTTP ${cierreForzado.status}`);
   const filaVictima = await prisma.tok_sesion.findUnique({ where: { sid: victima.sid } });
   verificar('la sesion queda cerrada con el MOTIVO en tok_sesion.motivo_cierre',
@@ -692,7 +706,7 @@ async function panelDeIdentidad(usuario, ajeno, cerrar, otroCliente) {
   });
   await sesionesSvc.cerrar(sesionOtroTenant.sid, 'logout');
   const strangerSid = randomUUID();
-  const stranger = await pedir(`/admin/sesiones/${strangerSid}`, jsonPost({ motivo: 'soporte' }, admin));
+  const stranger = await pedir(`/admin/sesiones/${strangerSid}`, cerrarCon({ motivo: 'soporte' }));
   verificar('cierre forzado de un sid inexistente → 404', stranger.status === 404, `HTTP ${stranger.status}`);
 
   seccion('Panel: lectura de auditoria y de sesiones (el filtro de tenant)');
@@ -711,32 +725,53 @@ async function panelDeIdentidad(usuario, ajeno, cerrar, otroCliente) {
   verificar('los eventos tienen ts, resultado, detalle y usuario resuelto',
     eventos.every((e) => e.ts && e.resultado) && eventos.some((e) => e.detalle?.startsWith('admin_')),
     `${eventos.length} evento(s)`);
-  verificar('el user_agent viene resumido, no la cadena cruda',
-    eventos.every((e) => typeof e.navegador === 'string'),
-    eventos[0]?.navegador ?? '');
+  verificar('el user_agent llega CRUDO (lo resume el front, ver lib/user-agent.ts)',
+    eventos.every((e) => typeof e.user_agent === 'string'),
+    eventos[0]?.user_agent?.slice(0, 40) ?? '');
 
-  // Travesia: un login fallido de un usuario de OTRO tenant no puede aparecer.
-  const ajenoOtro = await prisma.idn_usuario.findFirst({
-    where: { idusuario: { notIn: [usuario.idusuario, ajeno.idusuario] } },
-    select: { idusuario: true },
+  // Travesia: un login fallido de un usuario de OTRO tenant no puede aparecer. Por
+  // eso hace falta un usuario de verdad del otro cliente: con un usuario del mismo
+  // tenant la comprobacion daria verde sin provar nada.
+  // La IP es UNICA POR CORRIDA: con una fija (203.0.113.7), una fila que quedo de
+  // una corrida anterior con un usuario de este mismo tenant hace que el filtro
+  // parezca roto cuando no lo esta. Es la diferencia entre un test que prueba y un
+  // test que mira.
+  const ipIntrusa = `198.51.100.${1 + Math.floor(Math.random() * 250)}`;
+  nota(`IP de la prueba de travesia: ${ipIntrusa}`);
+
+  const ajenaOTro = await prisma.idn_usuario.create({
+    data: {
+      usuario: `verifajena${Date.now().toString(36).slice(-4)}`,
+      nombre: 'Verificacion',
+      apellido: 'Otro cliente',
+      clave_hash: await hashear(randomUUID()),
+      membresias: { create: { idcliente: otroCliente, rol: 'user' } },
+    },
+    select: { idusuario: true, usuario: true },
   });
-  if (ajenoOtro) {
+  try {
     await prisma.aud_login.create({
       data: {
         resultado: 'claves',
-        idusuario: ajenoOtro.idusuario,
+        idusuario: ajenaOTro.idusuario,
         idaplicacion: null,
-        ip: '203.0.113.7',
+        ip: ipIntrusa,
         user_agent: 'verificar-portal',
         detalle: 'clave_incorrecta',
       },
     });
-    const tras = await pedir(`/admin/auditoria?resultado=claves`, admin);
-    const intrusion = (tras.json?.eventos ?? []).filter((e) => e.ip === '203.0.113.7');
+    const tras = await pedir('/admin/auditoria?resultado=claves', admin);
+    const intrusos = (tras.json?.eventos ?? []).filter((e) => e.ip === ipIntrusa);
     verificar('un login fallido de un usuario de OTRO tenant NO aparece en la auditoria',
-      intrusion.length === 0, `${intrusion.length} intruso(s) de ${eventos.length} eventos`);
-  } else {
-    nota('No hay un tercer usuario en la base: el cruce de auditoria no se pudo probar.');
+      intrusos.length === 0,
+      `${intrusos.length} intruso(s) de ${tras.json?.eventos?.length ?? 0} evento(s)`);
+
+    const sasDelOtro = await pedir('/admin/sesiones', admin);
+    verificar('las sesiones del otro cliente tampoco aparecen',
+      (sasDelOtro.json?.sesiones ?? []).every((s) => s.idcliente === CLIENTE),
+      `${sasDelOtro.json?.total ?? 0} sesion(es), todas de ${CLIENTE}`);
+  } finally {
+    await limpiarUsuarioDePrueba(ajenaOTro.idusuario);
   }
 
   const resumen = await pedir('/admin/resumen', admin);
@@ -747,13 +782,30 @@ async function panelDeIdentidad(usuario, ajeno, cerrar, otroCliente) {
     (await prisma.idn_usuario_cliente.count({ where: { idcliente: CLIENTE } })) === resumen.json?.usuarios,
     'conteo = membresias del tenant');
 
-  // Limpieza de la alta de prueba: se desactiva en vez de borrar, igual que el
-  // panel. El borrado fisico lo hace el operador si quiere (no hay endpoint).
-  nota(`El usuario de prueba "${nuevoUsuario}" quedo INACTIVO en la base (limpiar a mano).`);
-  await prisma.idn_usuario.update({
-    where: { usuario: nuevoUsuario },
-    data: { estado: 'inactivo' },
-  });
+  // El usuario de prueba se borra, junto con lo que lo referencia. El panel no
+  // borra identidades (se desactivan, y con razon), pero esta corrida dejo filas
+  // en `aud_login` y `tok_sesion` que apuntan a el y las FK son NO ACTION: sin
+  // esta limpieza, `verificar-portal` deja basura que se acumula en cada corrida y
+  // ensucia el listado de usuarios del panel. Es el unico `delete` de
+  // `aud_login` del repo, y es aca: un script de prueba, no la aplicacion.
+  await limpiarUsuarioDePrueba(idAlta);
+  nota(`Usuario de prueba "${nuevoUsuario}" borrado (con sus sesiones y su auditoria).`);
+}
+
+/**
+ * Borra un usuario de prueba y todo lo que lo referencia.
+ *
+ * El orden importa por las FK (`NO ACTION`): primero las filas que lo apuntan
+ * (auditoria y sesiones), despues las suyas (habilitaciones y membresia), y al
+ * final la fila. Es lo unico del repo que borra de `aud_login`, y a proposito
+ * esta fuera de la aplicacion: `aud_login` es append-only para el producto.
+ */
+async function limpiarUsuarioDePrueba(idusuario) {
+  await prisma.aud_login.deleteMany({ where: { idusuario } });
+  await prisma.tok_sesion.deleteMany({ where: { idusuario } });
+  await prisma.idn_usuario_cliente_aplicacion.deleteMany({ where: { idusuario } });
+  await prisma.idn_usuario_cliente.deleteMany({ where: { idusuario } });
+  await prisma.idn_usuario.deleteMany({ where: { idusuario } });
 }
 
 /** Membresias activas del usuario, para comparar contra lo que devuelve la API. */

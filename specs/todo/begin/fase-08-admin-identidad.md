@@ -1,9 +1,13 @@
 # Fase 08 — Panel `admin_identidad` por cliente
 
-**Estado:** ⬜ Pendiente
+**Estado:** ✅ **Código cerrado y verificado por HTTP**: 41 comprobaciones de las secciones 6-9 de
+`scripts/verificar-portal.mjs` (las de la 07 son las secciones 1-5 del mismo archivo) y 186 de
+`scripts/verificar-oidc.mjs`, sobre `tourniquet_dev`. **Queda el pase de navegador**, marcado
+`[browser]` en los criterios.
 **Depende de:** [07](fase-07-portal-lanzador.md)
 **Repo:** Tourniquet
-**Requiere acción del usuario:** no
+**Requiere acción del usuario:** **sí** — aplicar `deploy/sql/02-sesion-motivo-cierre-admin.sql` en cada base
+de control de la instalación (en `tourniquet_dev` ya está aplicado y verificado)
 **Riesgo:** medio — es la primera superficie que escribe datos de identidad desde la UI
 **Reversible:** parcial: los cambios se pueden deshacer a mano, pero no hay rollback de UI
 **Spec normativo:** `specs/02-base-de-datos.md` §3, `specs/01` §7, `estetica-tourniquet.md` §2
@@ -175,32 +179,51 @@ frontend/src/app/admin/
 
 ## Criterios de aceptación
 
-- [ ] Un `admin_identidad` de `cervi` no ve ningún cliente, usuario, sesión ni evento de otro
+`[x]` es verificado por HTTP en esta corrida (secciones 6-9 de
+`scripts/verificar-portal.mjs`); `[browser]` es el pase manual en Chrome.
+
+- [x] Un `admin_identidad` de `cervi` no ve ningún cliente, usuario, sesión ni evento de otro
       tenant: ni en listados, ni en el endpoint de detalle, ni en el conteo del dashboard.
-- [ ] Un `user` (no admin) que pegue a `/admin/*` recibe 403 en **todas** las rutas, no sólo en la
-      navegación.
-- [ ] `GET /admin/usuarios` de un tenant no incluye usuarios de otro ni usuarios sin membresía en
-      ese tenant.
-- [ ] Alta de usuario que ya existe en otro cliente: reutiliza la fila de `idn_usuario`, agrega la
-      membresía, y **no** pisa nombre/apellido/email sin que el admin lo confirme explícitamente.
-- [ ] El alta muestra la clave temporal **una sola vez**; un refresh no la vuelve a mostrar.
-- [ ] Habilitar una app: el usuario puede entrar a esa app en el siguiente login. Deshabilitarla:
-      el authorize falla aunque tenga token vivo (criterio de `specs/04` Fase 03).
-- [ ] Desactivar un usuario (`estado='inactivo'`): su login falla con mensaje genérico y sus
-      sesiones se cierran en cascada.
-- [ ] Cierre forzado de sesión sin `motivo` ⇒ 400. Con motivo ⇒ la sesión muere, y en
-      `aud_login` queda el `sub` del admin, el `sid` y el motivo.
-- [ ] `DELETE /admin/sesiones/:sid` de otro tenant ⇒ 404.
-- [ ] `GET /admin/auditoria` de un admin de `cervi` **no** devuelve eventos de usuarios de otros
-      tenants (probado con un login fallido de un usuario de otro cliente: no aparece).
-- [ ] En el listado de usuarios no aparece `clave_hash`, `mfa_secret_cifrada` ni
-      `intentos_fallidos` (verificado mirando el JSON de la respuesta, no la pantalla).
-- [ ] Todas las acciones de escritura dejaron fila en `aud_login` con el `sub` real del admin
-      (nunca "sistema").
-- [ ] Panel usable a 360 px y con zoom 200 %; tablas con scroll horizontal **dentro de la tabla**,
-      no de la página.
-- [ ] axe sin `critical`/`serious`; contraste AA en todos los estados de los controles.
-- [ ] `npm run lint` y `npm run build` verdes.
+- [x] Un `user` (no admin) que pegue a `/admin/*` recibe 403 en **todas** las rutas, no sólo en
+      la navegación. Y sin sesión, 401 en las cuatro.
+- [x] `GET /admin/usuarios` de un tenant no incluye usuarios de otro ni usuarios sin membresía en
+      ese tenant. *(El filtro es `membresias: { some: { idcliente } }`.)*
+- [x] Alta de usuario que ya existe en otro cliente: reutiliza la fila de `idn_usuario`, agrega la
+      membresía, y **no** pisa nombre/apellido/email sin que el admin lo confirme
+      (`sobrescribirDatos: true`). Sin esa confirmación el alta responde **409**.
+- [x] El alta muestra la clave temporal **una sola vez**; un refresh no la vuelve a mostrar, y la
+      ficha del usuario no la trae.
+- [x] La clave la genera el **servidor** (20 caracteres del alfabeto sin ambiguos, con
+      `randomInt` de `node:crypto`), nunca el navegador.
+- [x] Habilitar una app: el usuario puede entrar a esa app en el siguiente login. Deshabilitarla:
+      el authorize falla aunque tenga token vivo (criterio de `specs/04` Fase 03, verificado en
+      `verificar-oidc` §5).
+- [x] Desactivar un usuario (`estado='inactivo'`): su login falla con mensaje genérico y sus
+      **sesiones del cliente** se cierran en cascada. Las de otro cliente no se tocan.
+- [x] Cierre forzado de sesión sin `motivo` ⇒ 400. Con un motivo fuera de la lista ⇒ 400. Con
+      motivo ⇒ la sesión muere con el motivo en `tok_sesion.motivo_cierre`, y en `aud_login`
+      queda el `sub` del admin, el `sid` y el motivo.
+- [x] `DELETE /admin/sesiones/:sid` de otro tenant ⇒ 404. *(Igual que un `sid` inexistente.)*
+- [x] `GET /admin/auditoria` de un admin de `cervi` **no** devuelve eventos de usuarios de otros
+      tenants: probado con un login fallido de un usuario **realmente** de otro cliente (IP
+      única por corrida), que no aparece.
+- [x] En el listado de usuarios no aparece `clave_hash`, `mfa_secret_cifrada` ni
+      `intentos_fallidos` (verificado mirando el JSON de la respuesta, no la pantalla: el `select`
+      ni los pide).
+- [x] Todas las acciones de escritura dejaron fila en `aud_login` con el `sub` **real** del admin
+      (nunca "sistema") y el afectado en el `detalle` (`specs/01` §7).
+- [x] Un `:id` o `:sid` que no es UUID ⇒ **400**, no el error de conversión del motor (que salía
+      como 500 y haría creer que el panel está roto).
+- [x] Deshabilitar una app que ya no está habilitada ⇒ 404: un "deshabilitar" que dice que
+      funcionó cuando no había nada que hacer es como se pierde la cuenta de por qué un
+      usuario no entra.
+- [x] `npm run lint` y `npm run build` verdes; `/admin/usuarios` pesa 5.4 KB de JS.
+- [browser] Panel usable a 360 px y con zoom 200 %; tablas con scroll horizontal **dentro** de la
+      tabla, no de la página.
+- [browser] axe sin `critical`/`serious` en las cuatro pantallas; contraste AA en todos los estados
+      de los controles.
+- [browser] El recorrido a mano: dar de alta a alguien, ver la clave, cerrar su sesión con motivo
+      desde la pantalla de sesiones, y ver las dos filas en la auditoría.
 
 ---
 
@@ -239,3 +262,74 @@ frontend/src/app/admin/
 6. **Confirmaciones que no se leen.** El diálogo de "deshabilitar usuario" con el tema fuerte puede
    terminar siendo un click sin leer. Los botones destructivos llevan texto explícito
    ("Deshabilitar el acceso de Juan Pérez a RHPro"), no sólo "Confirmar".
+
+## Estado de verificación
+
+### Qué se tocó
+
+| Archivo | Qué |
+|---|---|
+| `deploy/sql/02-sesion-motivo-cierre-admin.sql` | **Nuevo.** `motivo_cierre` a `nvarchar(30)` y `CK_tok_sesion_motivo` de 4 a 9 valores. Idempotente y aplicable en cualquier orden |
+| `deploy/sql/00-crear-base.sql` | El ancho nuevo de `motivo_cierre` y la lista de 9 valores del CHECK |
+| `backend/prisma/schema.prisma` | La relación `aud_login.usuario` (la FK `FK_aud_audit_usuario` ya estaba en el DDL) y la inversa en `idn_usuario` |
+| `backend/src/oidc/sesion.service.ts` | `MOTIVOS_ADMIN`, `esMotivoAdmin`, y `cerrar()` acepta motivo de admin: la familia de refresh se revoca con `revocada` y el motivo humano queda en la sesión |
+| `backend/src/registro-api/` | **Nuevo.** `admin.guard.ts`, `admin.controller.ts`, `admin.usuarios.service.ts`, `admin.sesiones.service.ts`, `admin.auditoria.service.ts`, `admin.types.ts`, `dto/admin.dto.ts`, `registro-api.module.ts` |
+| `backend/src/app.module.ts` | `RegistroApiModule` |
+| `backend/src/auth/auditoria.service.ts` | Los códigos `admin_*` de la 08 |
+| `frontend/src/lib/api.ts` | Los 12 métodos del panel, `ErrorAdmin`, `CodigoAdmin` y `MOTIVOS_CIERRE` |
+| `frontend/src/lib/fecha.ts` | **Nuevo.** `fecha()` y `hora()`, en `lib/` porque las usan tres pantallas del panel |
+| `frontend/src/design/components/Confirmar.tsx` | **Nuevo.** El diálogo de confirmación, con el foco en "Cancelar" y el botón que dice qué hace |
+| `frontend/src/app/admin/` | **Nuevo.** `_marco.tsx` (marco + navegación + cabecera), `_datos.tsx` (hook de carga y textos de error), `page.tsx` (resumen), `usuarios/page.tsx`, `sesiones/page.tsx`, `auditoria/page.tsx` |
+| `scripts/verificar-portal.mjs` | Secciones 6-9 (41 comprobaciones) y limpieza de los usuarios de prueba |
+
+### Comprobaciones hechas (`npm run verificar:portal`, secciones 6-9)
+
+| # | Qué | Resultado |
+|---|---|---|
+| 1 | `/admin/{usuarios,sesiones,auditoria,resumen}` con rol `user` | 403 `sin_permiso` en las cuatro |
+| 2 | Las mismas sin sesión | 401 `sesion_requerida` en las cuatro |
+| 3 | `GET /admin/usuarios/:id` con un `:id` que no es UUID | 400, no el error de conversión del motor |
+| 4 | Alta de usuario | 201, clave temporal de 20 caracteres, hash `$argon2id$`, membresía **del cliente del admin** y habilitación solo en ese cliente |
+| 5 | La respuesta del alta | Sin `clave_hash`, sin `intentos_fallidos`, sin `bloqueado_hasta` |
+| 6 | Auditoría del alta | `admin_alta_usuario|usuario=<uuid del altaado>|cliente=…|compartido=false` con el `idusuario` **del admin** |
+| 7 | Re-alta del mismo `usuario` | 409 y el nombre de la fila no cambia |
+| 8 | Listado con `?q=` | Trae al usuario nuevo y ningún secreto |
+| 9 | Reset de clave | 200, clave distinta a la del alta, y la ficha no la vuelve a mostrar |
+| 10 | Deshabilitar app / deshabilitar de nuevo / rehabilitar | 200 con la fila borrada, **404** la segunda vez, 200 con la fila de vuelta |
+| 11 | Desactivar y reactivar un usuario | `estado` cambia, y desactivar cierra en cascada sus sesiones del cliente |
+| 12 | Cierre forzado sin motivo / con motivo inválido / con motivo válido | 400 / 400 / 200, con el motivo en `tok_sesion.motivo_cierre` |
+| 13 | Auditoría del cierre forzado | `admin_cierra_sesion|usuario=…|cliente=…|sid=…|motivo=sospecha`, con el `idusuario` del admin |
+| 14 | Cierre forzado de un `sid` inexistente | 404 |
+| 15 | `/admin/sesiones` | Solo sesiones del cliente del admin, con el nombre de la app y el `idcliente` |
+| 16 | `/admin/auditoria` con un login fallido de un usuario de **otro** cliente (IP única por corrida) | No aparece |
+| 17 | `/admin/resumen` | Conteos del tenant, y el conteo de usuarios coincide con las membresías del cliente |
+
+### Bugs que aparecieron, y por qué importan
+
+1. **El guard operaba sobre "el primer cliente donde el usuario es admin"** en vez del
+   cliente de la sesión. Con un admin de los cuatro clientes, el panel de `cervi` escribía
+   en `cervi` aunque la sesión fuera de `marcelino`: el error más caro del panel,
+   por una línea de `find`. Ahora sin `?cliente=` se usa `ctx.cliente.idcliente`,
+   y si el usuario no administra ese cliente, 403 con la instrucción de cambiar de cliente
+   en el portal.
+2. **`:id` no-UUID daba 500** con el mensaje de conversión del motor, que no dice nada
+   del panel. Resuelto con `ParseUUIDPipe` en todos los `:id` y `:sid`: 400, que es lo
+   que es un pedido mal formado.
+3. **`skipDuplicates` no existe en el proveedor MSSQL de Prisma** (es de PostgreSQL,
+   MySQL y SQLite). Con el tipo de la API devuelve `never`; la habilitación del alta
+   va con un `upsert` por app, que además es lo que ya hace `IdentidadService`.
+4. **`solicitud_del_usuario` son 21 caracteres y `motivo_cierre` era `nvarchar(20)`.** Lo
+   detectó la comprobación del propio incremental (que por eso existe y no es decorativa):
+   con el CHECK nuevo y la columna vieja, el cierre del panel fallaría por longitud en el
+   momento de escribir. El ancho y la lista se cambian juntos, en el `02`.
+5. **La familia de refresh de un cierre de admin se revoca con `revocada`, no con el
+   motivo humano**: `tok_refresh_token.motivo` tiene su propia lista cerrada (con `rotado`
+   y `reemplazado`) y escribir ahí un valor de panel reventaría el CHECK con la sesión a
+   medio cerrar.
+
+### Lo que queda para el pase de navegador
+
+Los criterios marcados `[browser]`: 360 px y zoom 200 % con el scroll horizontal dentro de
+la tabla, axe sin `critical`/`serious`, contraste AA en los estados de los controles, y el
+recorrido a mano completo (alta → clave temporal → cierre forzado con motivo → las dos
+filas en la auditoría).

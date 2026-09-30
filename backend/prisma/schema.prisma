@@ -102,6 +102,7 @@ model idn_usuario {
   membresias          idn_usuario_cliente[]           @relation("FK_idn_usuario_cliente_usuario")
   membresiasAplicacion idn_usuario_cliente_aplicacion[] @relation("FK_idn_uca_usuario")
   sesiones             tok_sesion[]                      @relation("FK_tok_sesion_usuario")
+  eventos              aud_login[]                       @relation("FK_aud_audit_usuario")
 }
 
 model idn_usuario_cliente {
@@ -206,4 +207,10 @@ model aud_login {
   resultado        String   @map("resultado")
   detalle          String?  @map("detalle")
   @@map("aud_login")
+  // Relacion con `idn_usuario` (FK_aud_audit_usuario, ya en el DDL). La necesita el
+  // panel de admin para mostrar el LOGIN de quien hizo cada intento: sin esto habria
+  // que resolver los UUID a mano con una consulta por fila, que es donde se cuela un
+  // filtro por tenant olvidado. Es opcional (`idusuario` es NULL cuando el login
+  // fue de un usuario que no existe) y NO ACTION, como en el DDL.
+  usuario idn_usuario? @relation("FK_aud_audit_usuario", fields: [idusuario], references: [idusuario], onDelete: NoAction, onUpdate: NoAction)
 }

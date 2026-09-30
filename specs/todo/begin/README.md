@@ -11,7 +11,7 @@ nueva, se ejecuta de a una y se cierra con sus criterios de aceptación verifica
 
 ## Estado
 
-El repo **ya no está vacío**: la 01 a la 07 están hechas. Las primeras se cerraron
+El repo **ya no está vacío**: la 01 a la 08 están hechas. Las primeras se cerraron
 con verificación por HTTP sobre `tourniquet_dev` (`npm run verificar:oidc`,
 `npm run verificar:portal`) y, en la 04, además con 61 comprobaciones en Chrome
 contra el export real. La 07 queda con el pase de navegador pendiente: lo que no se
@@ -28,7 +28,7 @@ marcado `[browser]` en los criterios de la fase.
 | [05](fase-05-registro-demo.md) | Registro demo: cliente, app, base, alta de usuario | Tourniquet | **Sí** (semilla) | ✅ Completada y verificada |
 | [06](fase-06-rhpro-dual-guard.md) | RHPro como relying party (guard dual + `idp_sub`) | RHPro | **Sí** | ✅ Completada y verificada (backend + front, con `code` real y en navegador) |
 | [07](fase-07-portal-lanzador.md) | Portal lanzador: membresías y lista de apps | Tourniquet | **Sí** (`01-aplicacion-url-inicio.sql`) | ✅ Código cerrado y verificado por HTTP (46 + 186 comprobaciones); queda el pase de navegador |
-| [08](fase-08-admin-identidad.md) | Panel `admin_identidad` por cliente | Tourniquet | No | ⬜ Pendiente |
+| [08](fase-08-admin-identidad.md) | Panel `admin_identidad` por cliente | Tourniquet | **Sí** (`02-sesion-motivo-cierre-admin.sql`) | ✅ Código cerrado y verificado por HTTP (41 comprobaciones); queda el pase de navegador |
 | [09](fase-09-endurecimiento.md) | Endurecimiento: MFA, rotación, jobs, export de registro | Tourniquet | **Sí** (jobs) | ⬜ Pendiente |
 | [10](fase-10-despliegue-cliente.md) | Despliegue en un cliente: runbooks e instalación | — | **Sí** | ⬜ Pendiente |
 | [11](fase-11-cierre-fase-01.md) | Cierre de la Fase 01 de `specs/04` | — | No | ⬜ Pendiente |
