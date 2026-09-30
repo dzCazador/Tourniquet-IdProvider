@@ -15,7 +15,8 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { sidDeLaPeticion, escribirCookieDeSesion, borrarCookieDeSesion } from '../oidc/cookies';
-import { AuditoriaService } from './auditoria.service';
+import { SesionService } from '../oidc/sesion.service';
+import { AuditoriaService, detalleDe } from './auditoria.service';
 import { LoginDto } from './dto/login.dto';
 import { IdentidadService } from './identidad.service';
 import { ErrorPortal, PortalService, type EstadoSesion } from './portal.service';
@@ -93,6 +94,7 @@ export class AuthController {
   constructor(
     private readonly identidad: IdentidadService,
     private readonly portal: PortalService,
+    private readonly sesiones: SesionService,
     private readonly auditoria: AuditoriaService,
   ) {}
 
@@ -230,6 +232,60 @@ export class AuthController {
         `usuario=${idusuario ? idusuario.slice(0, 8) : '(ninguno)'}`,
     );
     res.status(HttpStatus.OK).json({ ok: true, cerrada: idusuario !== null });
+  }
+
+  /**
+   * `POST /auth/logout-all`: "salir de todo".
+   *
+   * Cierra **todas** las sesiones del usuario **en el cliente de su sesion**: la
+   * del portal y la de cada app a la que entro (`specs/01` §4). Un usuario de dos
+   * clientes no se ve afectado en el otro, porque el filtro es `idcliente`.
+   *
+   * Es distinto de `/auth/logout`, que cierra solo la sesion del portal y deja
+   * vivas las apps. Y es distinto de `/oidc/logout` —que hace lo mismo pero ademas
+   * acepta el `post_logout_redirect_uri` de una app y lo valida contra el registro,
+   * por RFC 9457— porque el boton del lanzador no tiene ningun `redirect_uri` de
+   * app que validar: el destino es la despedida del portal.
+   *
+   * Idempotente: sin cookie, o con la sesion ya cerrada, es un 200 con
+   * `cerradas: 0`.
+   */
+  @Post('logout-all')
+  async logoutAll(@Req() req: Request, @Res() res: Response, @Ip() ip: string): Promise<void> {
+    noStore(res);
+    const userAgent = req.get('user-agent') ?? 'desconocido';
+    const sid = sidDeLaPeticion(req);
+    const sesion = sid ? await this.sesiones.viva(sid) : null;
+    let cerradas = 0;
+
+    if (sesion) {
+      cerradas = await this.sesiones.cerrarTodasDelCliente(
+        sesion.idusuario,
+        sesion.idcliente,
+        'logout',
+      );
+
+      // Con el `sub` real de la sesion (`specs/01` §7). Sin `idusuario` esta fila
+      // seria indistinguible de un logout sin sesion, y "salir de todo" es de las
+      // cosas que mas se investiga despues: sin saber quien lo pidio, no sirve.
+      await this.auditoria.registrarSeguro({
+        resultado: 'ok',
+        idusuario: sesion.idusuario,
+        idaplicacion: null,
+        ip,
+        userAgent,
+        detalle: detalleDe('logout_todo', { cliente: sesion.idcliente, sesiones: String(cerradas) }),
+      });
+    }
+
+    borrarCookieDeSesion(req, res);
+
+    this.logger.log(
+      `salir de todo: usuario=${sesion ? sesion.idusuario.slice(0, 8) : '(ninguno)'} ` +
+        `sesiones=${cerradas}`,
+    );
+
+    res.status(HttpStatus.OK).json({ ok: true, cerradas });
   }
 }
 

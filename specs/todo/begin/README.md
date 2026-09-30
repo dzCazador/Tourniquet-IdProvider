@@ -11,9 +11,12 @@ nueva, se ejecuta de a una y se cierra con sus criterios de aceptación verifica
 
 ## Estado
 
-El repo **ya no está vacío**: la 01, la 02, la 03 y la 04 están hechas y
-verificadas — la 04 con 78 comprobaciones por HTTP, sobre la base de control, y
-61 en Chrome contra el export real.
+El repo **ya no está vacío**: la 01 a la 07 están hechas. Las primeras se cerraron
+con verificación por HTTP sobre `tourniquet_dev` (`npm run verificar:oidc`,
+`npm run verificar:portal`) y, en la 04, además con 61 comprobaciones en Chrome
+contra el export real. La 07 queda con el pase de navegador pendiente: lo que no se
+puede comprobar con `fetch` (axe, 360 px, teclado, `prefers-reduced-motion`) está
+marcado `[browser]` en los criterios de la fase.
 
 | Fase | Título | Repo | SQL del usuario | Estado |
 |------|--------|------|:---------------:|--------|
@@ -24,7 +27,7 @@ verificadas — la 04 con 78 comprobaciones por HTTP, sobre la base de control, 
 | [04](fase-04-portal-login.md) | Portal: login, tema gótico, callback decodificado | Tourniquet | No | ✅ Completada y verificada |
 | [05](fase-05-registro-demo.md) | Registro demo: cliente, app, base, alta de usuario | Tourniquet | **Sí** (semilla) | ✅ Completada y verificada |
 | [06](fase-06-rhpro-dual-guard.md) | RHPro como relying party (guard dual + `idp_sub`) | RHPro | **Sí** | ✅ Completada y verificada (backend + front, con `code` real y en navegador) |
-| [07](fase-07-portal-lanzador.md) | Portal lanzador: membresías y lista de apps | Tourniquet | No | ⬜ Pendiente |
+| [07](fase-07-portal-lanzador.md) | Portal lanzador: membresías y lista de apps | Tourniquet | **Sí** (`01-aplicacion-url-inicio.sql`) | ✅ Código cerrado y verificado por HTTP (46 + 186 comprobaciones); queda el pase de navegador |
 | [08](fase-08-admin-identidad.md) | Panel `admin_identidad` por cliente | Tourniquet | No | ⬜ Pendiente |
 | [09](fase-09-endurecimiento.md) | Endurecimiento: MFA, rotación, jobs, export de registro | Tourniquet | **Sí** (jobs) | ⬜ Pendiente |
 | [10](fase-10-despliegue-cliente.md) | Despliegue en un cliente: runbooks e instalación | — | **Sí** | ⬜ Pendiente |
@@ -129,7 +132,8 @@ Tourniquet/
 │       ├── sesiones/            tok_sesion, refresh, codes
 │       └── registro-api/        (Fase 08) admin_identidad
 ├── frontend/                    Next.js App Router, output: "export"
-│   ├── src/app/                 /login, /callback, /apps, /admin, /mi-cuenta
+│   ├── src/app/                 /login, / (lanzador), /apps/puerta, /consentimiento,
+│   │                                   /mi-cuenta, /logout/despedida, /admin (08)
 │   └── src/design/              tokens del tema gótico, ornamentos, componentes base
 ├── deploy/
 │   ├── sql/                     NN-titulo.sql versionado (SQL Server)

@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
 import { AplicacionService } from './aplicacion.service';
@@ -25,11 +25,41 @@ export interface PeticionAuthorize {
 
 export interface ResultadoAuthorize {
   url: string;
+  /**
+   * Que sesion y que app produjo este `url`, para que el que llama pueda auditarlo
+   * sin volver a consultar la base.
+   *
+   * Viene cuando se **emitio** un `code` (o sea, en el `consentir`). En los caminos
+   * donde no se emitio nada —login, pantalla de consentimiento— viene `undefined`, y
+   * no hay nada que auditar porque no ocurrio un ingreso: no se creo sesion de app.
+   */
+  emitido?: {
+    idusuario: string;
+    idcliente: string;
+    idaplicacion: string;
+  };
 }
 
 /**
- * `GET /oidc/authorize`: valida el pedido y, si hay sesion central, emite un
- * authorization code de un solo uso.
+ * Lo que la pantalla de consentimiento necesita para pintar los hechos.
+ *
+ * `base` es el **nombre** de la base de datos de la app en ese cliente
+ * (`cat_base_datos.base`), nunca el host, nunca el usuario, nunca la credencial
+ * (`specs/01` §6). Es lo unico que el usuario tiene motivo legitimo de saber antes
+ * de entrar: a que datos va a acceder. Es `null` cuando la app no tiene base
+ * inventariada, y eso no es un error: una app que no usa base de negocio no la
+ * tiene.
+ */
+export interface DatosConsentimiento {
+  app: { codigo: string; nombre: string };
+  cliente: { codigo: string; nombre: string };
+  base: string | null;
+}
+
+/**
+ * `GET /oidc/authorize`: valida el pedido y, si hay sesion central, **prepara el
+ * ingreso de la app**. El `code` se emite recien cuando el portal acepta el
+ * consentimiento (`POST /oidc/consentir`, Fase 07).
  *
  * **El orden de las validaciones no es arbitrario.** Es lo que evita filtrar
  * informacion y lo que evita el redirect abierto:
@@ -51,6 +81,14 @@ export interface ResultadoAuthorize {
  *      portal con un `returnTo`.
  *   8. El usuario esta habilitado para esa app, y la app existe para ese
  *      cliente.
+ *
+ * Todo esto se corre **dos veces** en un ingreso normal: una en el authorize y otra
+ * en el `/oidc/consentir`, porque entre las dos pantallas hay un portal entero de
+ * por medio. Es a proposito: el portal es codigo del cliente, y la unica forma de
+ * que lo que se acepte sea exactamente lo que se pidio es volver a comprobarlo en
+ * el servidor. Lo que NO se revalida (porque no se puede) es el `code_verifier`,
+ * que vive en el navegador de la app: si el portal cambiara el challenge, el canje
+ * falla por PKCE (`specs/01` §1.1).
  */
 @Injectable()
 export class AuthorizeService {
@@ -68,9 +106,25 @@ export class AuthorizeService {
     this.portalUrl = (config.get<string>('TQ_PORTAL_URL') ?? '').replace(/\/+$/, '');
   }
 
+  /**
+   * Valida el pedido y devuelve la **URL a la que tiene que ir el navegador**: el
+   * login del portal si no hay sesion, la pantalla de consentimiento si la hay.
+   *
+   * `consentida: true` saltea la pantalla y emite el `code`. El unico llamador que
+   * lo pasa es `POST /oidc/consentir`.
+   *
+   * `exigirSesion: true` cambia el paso 7: sin sesion central **no** se redirige al
+   * login sino que se responde `login_required`. Lo usa tambien el `consentir`, y
+   * es lo que hace que "aceptar" no pueda usarse como una segunda puerta al
+   * authorize: sin sesion, la aceptacion es un 401 y no una URL de destino. Sin
+   * esto, un portal que navegara a la URL devuelta mandaria al usuario al login
+   * creyendo que es la app, y el `code` se emitiria en el authorize que viene
+   * después sin que nadie haya aceptado nada.
+   */
   async autorizar(
     peticion: PeticionAuthorize,
     ctx: ContextoSesion & { sidPortal: string | null; urlAuthorize: string },
+    opciones: { consentida?: boolean; exigirSesion?: boolean } = {},
   ): Promise<ResultadoAuthorize> {
     // --- 1. response_type -------------------------------------------------
     if (peticion.response_type !== 'code') {
@@ -137,6 +191,9 @@ export class AuthorizeService {
     // --- 7. sesion central ------------------------------------------------
     const sesionPortal = ctx.sidPortal ? await this.sesiones.viva(ctx.sidPortal) : null;
     if (!sesionPortal) {
+      if (opciones.exigirSesion) {
+        throw new ErrorOidc('login_required', null, HttpStatus.UNAUTHORIZED);
+      }
       return this.redirigirAlLogin(ctx.urlAuthorize);
     }
 
@@ -158,6 +215,16 @@ export class AuthorizeService {
 
     if (!(await this.apps.perteneceAlCliente(sesionPortal.idcliente, app.codigo))) {
       throw error('unauthorized_client');
+    }
+
+    // --- 9 · Consentimiento (Fase 07) -------------------------------------
+    //
+    // Aca termina el authorize y arranca la pantalla de consentimiento. No se
+    // emite nada todavia: el `code` sale de `POST /oidc/consentir`, que vuelve a
+    // pasar por todo lo de arriba. Ver `specs/01` §1.1 para por que el
+    // consentimiento es del IdP y no del lanzador.
+    if (!opciones.consentida) {
+      return { url: this.urlDeConsentimiento(peticion) };
     }
 
     // --- Emision ----------------------------------------------------------
@@ -191,10 +258,129 @@ export class AuthorizeService {
 
     this.logger.log(
       `code emitido app=${app.codigo} cliente=${sesion.idcliente} ` +
-        `sid=${sesion.sid.slice(0, 8)} scope=${scope}`,
+        `sid=${sesion.sid.slice(0, 8)} scope=${scope} consentido=true`,
     );
 
-    return { url: agregarParametros(peticion.redirect_uri, { code, state: peticion.state }) };
+    return {
+      url: agregarParametros(peticion.redirect_uri, { code, state: peticion.state }),
+      emitido: {
+        idusuario: sesionPortal.idusuario,
+        idcliente: sesionPortal.idcliente,
+        idaplicacion: app.codigo,
+      },
+    };
+  }
+
+  /**
+   * Hechos para pintar el consentimiento: que app es, de que cliente es y a que
+   * base entra.
+   *
+   * No devuelve el `redirect_uri` ni el `code_challenge` a proposito: la pantalla
+   * los tiene en su propia URL y no los necesita para mostrar nada. Lo que no se
+   * puede es devolver **mas** de lo que el usuario ya va a ver, y por eso este
+   * endpoint no acepta un `tenant` del cliente: el cliente es el de la sesion, y
+   * el filtro de habilitacion va por esa sesion y no por el parametro.
+   */
+  async datosDeConsentimiento(
+    clientId: string | null,
+    ctx: ContextoSesion & { sidPortal: string | null },
+  ): Promise<DatosConsentimiento> {
+    if (!clientId) {
+      throw new ErrorOidc('invalid_request');
+    }
+
+    const app = await this.apps.activa(clientId);
+    if (!app) {
+      // Igual que en el authorize: inexistente e inactiva son la misma respuesta,
+      // para que el endpoint no sea un oraculo del catalogo de apps.
+      throw new ErrorOidc('unauthorized_client');
+    }
+
+    const sesionPortal = ctx.sidPortal ? await this.sesiones.viva(ctx.sidPortal) : null;
+    if (!sesionPortal) {
+      throw new ErrorOidc('login_required', null, HttpStatus.UNAUTHORIZED);
+    }
+
+    if (!(await this.apps.perteneceAlCliente(sesionPortal.idcliente, app.codigo))) {
+      throw new ErrorOidc('unauthorized_client');
+    }
+
+    const habilitada = await this.prisma.idn_usuario_cliente_aplicacion.findUnique({
+      where: {
+        idusuario_idcliente_idaplicacion: {
+          idusuario: sesionPortal.idusuario,
+          idcliente: sesionPortal.idcliente,
+          idaplicacion: app.codigo,
+        },
+      },
+      select: { idusuario: true },
+    });
+    if (!habilitada) {
+      throw new ErrorOidc('access_denied');
+    }
+
+    const [cliente, base] = await Promise.all([
+      this.prisma.cat_cliente.findUnique({
+        where: { codigo: sesionPortal.idcliente },
+        select: { codigo: true, nombre: true },
+      }),
+      // El indice `UQ_cat_base_datos_cliente_aplicacion_activa` deja **una** base
+      // activa por combinacion cliente+app (`specs/02` §4), asi que el `findFirst`
+      // no es "el primero que encuentre": hay a lo sumo uno.
+      this.prisma.cat_base_datos.findFirst({
+        where: { idcliente: sesionPortal.idcliente, idaplicacion: app.codigo, estado: 'activo' },
+        select: { base: true },
+        orderBy: { codigo: 'asc' },
+      }),
+    ]);
+
+    if (!cliente) {
+      // Sesion huerfana: el cliente se dio de baja con la sesion abierta. Es un
+      // `access_denied` y no un 500, porque desde afuera es indistinguible de "no
+      // tenes acceso a eso".
+      throw new ErrorOidc('access_denied');
+    }
+
+    return {
+      app: { codigo: app.codigo, nombre: app.nombre },
+      cliente: { codigo: cliente.codigo, nombre: cliente.nombre },
+      base: base?.base ?? null,
+    };
+  }
+
+  /**
+   * URL de la pantalla de consentimiento del portal, con el pedido intacto.
+   *
+   * Los seis parametros viajan tal cual. Los que importan son `redirect_uri` y
+   * `code_challenge`, y pueden ir en la URL sin que eso sea un agujero: el
+   * `consentir` vuelve a comparar el `redirect_uri` **exacto** contra el registro
+   * y a exigir el formato S256 del challenge, asi que un valor cambiado ahi falla
+   * en el servidor; y un challenge cambiado hace fallar el canje por PKCE, porque
+   * el `code_verifier` esta en el navegador de la app. El `state` viaja en la URL
+   * y no en un almacen del navegador a proposito: es el valor que el portal tiene
+   * que devolver tal cual, y la fuente que no se puede manipular en el camino es el
+   * propio pedido original.
+   */
+  private urlDeConsentimiento(peticion: PeticionAuthorize): string {
+    if (!this.portalUrl) {
+      // Sin portal no hay donde mostrar el consentimiento, y no hay donde pedir la
+      // clave tampoco. Es la misma falla que el login: sin `TQ_PORTAL_URL` el IdP
+      // no tiene front, y se responde con el codigo del error en vez de emitir un
+      // `code` que nadie autorizo.
+      throw new ErrorOidc('portal_no_configurado');
+    }
+
+    const query = new URLSearchParams({
+      response_type: peticion.response_type as string,
+      client_id: peticion.client_id as string,
+      redirect_uri: peticion.redirect_uri as string,
+      state: peticion.state as string,
+      code_challenge: peticion.code_challenge as string,
+      code_challenge_method: 'S256',
+      scope: peticion.scope ?? 'openid',
+    });
+
+    return `${this.portalUrl}/consentimiento?${query.toString()}`;
   }
 
   /**

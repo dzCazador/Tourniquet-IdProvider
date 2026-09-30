@@ -25,6 +25,43 @@ export interface ContextoSesion {
 }
 
 /**
+ * Sesión con los nombres de la app y del cliente ya resueltos, que es como la
+ * muestran las dos pantallas que la listan (`/me/sesiones` y `/admin/sesiones`).
+ */
+export interface SesionConNombres extends Sesion {
+  /** `null` en la sesión del portal: el portal no es una app. */
+  aplicacion: { nombre: string } | null;
+  cliente: { nombre: string };
+}
+
+/**
+ * IP con los dos ultimos octetos ocultos: `190.5.x.x`.
+ *
+ * Se usa en **las sesiones propias** (`/me/sesiones`), no en las del panel de
+ * admin. La razon es que las dos pantallas tienen readershipes distintas: un
+ * usuario no necesita ver el octeto de su propia IP para reconocer su sesion, y en
+ * un puesto de trabajo compartido la pantalla es visible para los que estan al
+ * lado; un admin, en cambio, diagnostica con la IP entera y para eso la pide.
+ *
+ * El prefijo `::ffff:` se quita antes de truncar: es como Express entrega una IPv4
+ * cuando el socket es IPv6 (`req.ip` sale `::ffff:127.0.0.1` en `next dev` y en
+ * cualquier proxy IPv6), y sin quitarlo el resultado era `::ffff:127.0.x.x`, que no
+ * es una IP ni un `x.x` y se ve como un dato roto.
+ *
+ * Una IP que no es IPv4 —un IPv6 de verdad, un unix socket, un `localhost` de
+ * desarrollo— se devuelve como "origen local" en vez de deformarse: truncar un
+ * IPv6 por puntos es inventar una direccion que no existe.
+ */
+export function ipTruncada(ip: string): string {
+  const limpio = ip.startsWith('::ffff:') ? ip.slice('::ffff:'.length) : ip;
+  const partes = limpio.split('.');
+  if (partes.length !== 4) {
+    return partes.length > 1 ? 'origen local' : limpio;
+  }
+  return `${partes[0]}.${partes[1]}.x.x`;
+}
+
+/**
  * Ciclo de vida de `tok_sesion` y `tok_refresh_token`.
  *
  * Hay **una sesion por app** (`idaplicacion`), y ademas la del portal
@@ -64,6 +101,77 @@ export class SesionService {
 
   estaViva(sesion: Sesion, ahora = new Date()): boolean {
     return sesion.cerrada_en === null && sesion.expira_en > ahora;
+  }
+
+  /**
+   * Sesiones **vivas** de un usuario en un cliente, de la mas nueva a la mas vieja.
+   *
+   * El filtro va entero en el `where` —usuario, cliente, abierta, sin vencer— y no
+   * como un `if` sobre un `findMany` sin filtro: `/me/sesiones` y `/admin/sesiones`
+   * muestran datos de otros tenants si el filtro se olvida en alguno, y ese error no
+   * se ve en la pantalla (la lista sale vacía o con gente de más) sino en la prueba
+   * de travesía de la fase, que es la unica que lo caza (invariante de `AGENTS.md`).
+   *
+   * Trae el nombre de la app y del cliente por relación, no por codigo: la lista
+   * es para que una persona lea "RHPro, desde las 14:05", y mostrar `rhpro`
+   * significaría que el portal obliga a saber el código de la app.
+   */
+  async activasDe(idusuario: string, idcliente: string): Promise<SesionConNombres[]> {
+    return this.prisma.tok_sesion.findMany({
+      where: { idusuario, idcliente, cerrada_en: null, expira_en: { gt: new Date() } },
+      select: {
+        sid: true,
+        idusuario: true,
+        idcliente: true,
+        idaplicacion: true,
+        amr: true,
+        ip: true,
+        user_agent: true,
+        creado_en: true,
+        expira_en: true,
+        cerrada_en: true,
+        motivo_cierre: true,
+        aplicacion: { select: { nombre: true } },
+        cliente: { select: { nombre: true } },
+      },
+      orderBy: { creado_en: 'desc' },
+    });
+  }
+
+  /**
+   * Sesion viva **de ese usuario y de ese cliente**, o `null`.
+   *
+   * Es el filtro que hace que `DELETE /me/sesiones/:sid` de un `sid` ajeno sea un
+   * 404 y no un cierre: la consulta lleva `idusuario` e `idcliente` adentro, así
+   * que un `sid` de otro usuario es indistinguible de uno que no existe. Cerrar la
+   * sesión de otro no sería un permiso, sería un agujero.
+   */
+  async vivaDeUsuario(sid: string, idusuario: string, idcliente: string): Promise<Sesion | null> {
+    if (!this.esUuid(sid)) {
+      return null;
+    }
+
+    const sesion = await this.prisma.tok_sesion.findFirst({
+      where: { sid, idusuario, idcliente, cerrada_en: null, expira_en: { gt: new Date() } },
+    });
+    return sesion;
+  }
+
+  /**
+   * Sesión viva de un `sid` **con filtro de tenant**, para el cierre forzado del
+   * panel de admin (`specs/01` §7).
+   *
+   * Es el mismo criterio que `vivaDeUsuario` y por el mismo motivo: un `sid` de otro
+   * cliente da `null` y el panel responde 404, no "ese `sid` es de jugos".
+   */
+  async vivaDeTenant(sid: string, idcliente: string): Promise<Sesion | null> {
+    if (!this.esUuid(sid)) {
+      return null;
+    }
+
+    return this.prisma.tok_sesion.findFirst({
+      where: { sid, idcliente, cerrada_en: null, expira_en: { gt: new Date() } },
+    });
   }
 
   /**

@@ -347,6 +347,71 @@ export class PortalService {
   }
 
   /**
+   * Cambia el cliente activo de la sesion **re-emitiendo la fila de sesion**.
+   *
+   * Por que una fila nueva y no un parametro, un `localStorage` o una segunda
+   * cookie: el `tenant` de todo lo que sale del portal se deduce de
+   * `tok_sesion.idcliente` (`contextoDe`), y en cuanto exista un endpoint que lo
+   * acepte de otro lado, el `tenant` del token de una app deja de ser el que el
+   * usuario eligio. Re-emitir deja una sola fuente y cuesta una fila.
+   *
+   * Lo que NO se toca son las sesiones de las apps: cada una es su propia fila con
+   * su `idcliente`, y el token que ya emitieron sigue siendo valido con el tenant
+   * que tenia. Cambiar de cliente en el lanzador no le roba la sesion a una
+   * pestaña de RHPro que quedo abierta, que es el fear de la trampa 1 de la fase
+   * 07.
+   *
+   * La fila vieja se cierra con `motivo_cierre = 'revocada'` y no `logout`:
+   * `logout` significaria que el usuario salio, y en la tabla de sesiones esto es
+   * una re-emision. Los cuatro valores del CHECK no dan un nombre exacto para
+   * "cambie de cliente", y `revocada` es el mas cercano de los que signifcan "esta
+   * sesion dejo de valer porque el sistema emitio otra" — el propio
+   * `aud_login.cambio_de_cliente` es donde queda el detalle fino.
+   *
+   * Idempotente: pedir el cliente que ya esta activo no hace ni una fila nueva, y
+   * devuelve la sesion actual.
+   */
+  async cambiarCliente(
+    ctx: ContextoSesionPortal,
+    idcliente: string,
+    ctxPeticion: { ip: string; userAgent: string },
+  ): Promise<{ sesion: Sesion; cliente: ResumenCliente; cambio: boolean }> {
+    // Se valida contra `membresias`, que son las del usuario y solo de clientes
+    // activos. Un `cat_cliente.findUnique` de un cliente que existe pero del que no
+    // es miembro daria un 403 distinto del de "no existe", y con eso se confirma
+    // que el cliente existe.
+    const destino = ctx.membresias.find((m) => m.idcliente === idcliente);
+    if (!destino) {
+      throw new ErrorPortal('cliente_no_pertenece', HttpStatus.FORBIDDEN, {
+        mensaje: `El usuario no es miembro del cliente "${idcliente}".`,
+      });
+    }
+
+    if (destino.idcliente === ctx.cliente.idcliente) {
+      return { sesion: ctx.sesion, cliente: ctx.cliente, cambio: false };
+    }
+
+    await this.sesiones.cerrar(ctx.sesion.sid, 'revocada');
+
+    const sesion = await this.sesiones.sesionDePortal(
+      ctx.usuario.idusuario,
+      destino.idcliente,
+      ctxPeticion,
+    );
+
+    this.logger.log(
+      `cambio de cliente: usuario=${ctx.usuario.usuario} ` +
+        `de=${ctx.cliente.idcliente} a=${destino.idcliente} sid=${sesion.sid.slice(0, 8)}`,
+    );
+
+    return {
+      sesion,
+      cliente: { idcliente: destino.idcliente, nombre: destino.nombre },
+      cambio: true,
+    };
+  }
+
+  /**
    * Traduce el fallo de `IdentidadService.verificar` al contrato del portal.
    *
    * `verificar` ya audito el intento, asi que aca no se vuelve a auditar lo

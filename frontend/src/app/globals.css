@@ -72,6 +72,23 @@
     border-color: theme('colors.oxblood');
   }
 
+  /*
+   * Marco de placa de las tarjetas del lanzador (`PlacaApp`).
+   *
+   * El bisel de `Placa` (el componente) esta dibujado con SVG porque la placa del
+   * login necesita esquinas achaflanadas y un remache. Una tarjeta de app no
+   * necesita nada de eso: alcanza con un borde de 1 px en `plata/60`, que es lo
+   * unico que dibuja el limite de la tarjeta sobre `tinta-alta` (1.06:1 contra el
+   * fondo de la pagina, `estetica-tourniquet.md` §4).
+   *
+   * Y con `hover:border-plata`: el borde de una tarjeta es un borde de control, y
+   * si sube de 4.83:1 a 12.29:1 al pasar el mouse, el cambio se ve.
+   */
+  .placa-marco {
+    border: 1px solid;
+    border-color: theme('colors.plata/60');
+  }
+
   /* Textura de peltre muy fina para el plano del login. Dos gradientes
      cruzados, sin imagen, sin request. La Fase 07 suma `malla` y `grano`; esta
      es la version austera y ya alcanza para que el fondo no sea un bloque. */
@@ -175,5 +192,58 @@
       cover;
     background-position: center;
     background-repeat: no-repeat;
+  }
+}
+
+/*
+ * Los @keyframes del tema (Fase 07).
+ *
+ * Vienen de `design/motion.ts` y se inyectan aca en vez de escribirse a mano en el
+ * CSS: los numeros son los de `DURACION` y la curva es `CURVA`, y duplicarlos en
+ * la hoja de estilos seria tenerlos en dos lugares con la mitad de la chance de
+ * que se muevan juntos. `Marco` importa `KEYFRAMES`; este bloque es el unico lugar
+ * de la hoja donde se define una animacion del producto.
+ *
+ * No hay mas animaciones que estas tres. `estetica-tourniquet.md` §6 prohibe
+ * parpadeos, flashes de error, shake de formulario, glitch reveal y animaciones en
+ * tablas con datos, y las que quedan son la entrada del anillo, la mancha de tinta
+ * en loop y el sello de lacre. Las tres se apagan solas con `prefers-reduced-motion`
+ * porque todas se invocan con el variante `motion-safe:` de Tailwind.
+ */
+@keyframes tourniquet-anillo {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+    filter: blur(2px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+    filter: blur(0);
+  }
+}
+
+@keyframes tourniquet-tinta {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.5;
+  }
+  70% {
+    opacity: 0.15;
+  }
+  100% {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+
+@keyframes tourniquet-sello {
+  from {
+    transform: rotate(-3deg) scale(0.9);
+    opacity: 0;
+  }
+  to {
+    transform: rotate(0) scale(1);
+    opacity: 1;
   }
 }

@@ -99,7 +99,10 @@ CREATE TABLE #apps
     nombre           nvarchar(100) NOT NULL,
     tipo_cliente     nvarchar(10)  NOT NULL,
     redirect_uris    nvarchar(max) NOT NULL,
-    origenes         nvarchar(max) NOT NULL
+    origenes         nvarchar(max) NOT NULL,
+    -- Donde abre el lanzador del portal (Fase 07). Es la pagina que inicia el
+    -- flujo OIDC de la app: su state y su challenge (`specs/01` §1.2).
+    url_inicio       nvarchar(1000) NOT NULL
 );
 
 IF OBJECT_ID(N'tempdb..#clientes') IS NOT NULL DROP TABLE #clientes;
@@ -126,11 +129,17 @@ CREATE TABLE #bases
 
 -- Apps. `rhpro` es la de hoy. Su codigo es el `aud` que se emite en el token, asi
 -- que es estable y legible: cambiarlo invalida todos los tokens emitidos.
-INSERT INTO #apps (codigo, nombre, tipo_cliente, redirect_uris, origenes)
+--
+-- `url_inicio` es `/login` y no `/`: la pagina de ingreso es la que tiene el boton
+-- de Tourniquet y la que arma el `state` y el challenge del canje. Con `/` el
+-- usuario llegaria al login igual (por un 302 de la app) pero con un salto de mas
+-- entre el lanzador y la pantalla de ingreso.
+INSERT INTO #apps (codigo, nombre, tipo_cliente, redirect_uris, origenes, url_inicio)
 VALUES
     (N'rhpro', N'RHPro', N'public',
      N'["http://localhost:3000/auth/callback"]',
-     N'["http://localhost:3000"]');
+     N'["http://localhost:3000"]',
+     N'http://localhost:3000/login');
 
 -- Clientes. `codigo` sale en el claim `tenant` del token: es el identificador de
 -- la persona en ESE cliente, asi que no se cambia nunca.
@@ -171,25 +180,42 @@ GO
 -- 2 · Apps
 -- -----------------------------------------------------------------------------
 DECLARE @codigo nvarchar(40), @nombre nvarchar(100), @tipo nvarchar(10),
-        @uris nvarchar(max), @orig nvarchar(max);
+        @uris nvarchar(max), @orig nvarchar(max), @inicio nvarchar(1000);
 
 DECLARE cur CURSOR LOCAL FAST_FORWARD FOR
-    SELECT codigo, nombre, tipo_cliente, redirect_uris, origenes FROM #apps;
+    SELECT codigo, nombre, tipo_cliente, redirect_uris, origenes, url_inicio FROM #apps;
 
 OPEN cur;
-FETCH NEXT FROM cur INTO @codigo, @nombre, @tipo, @uris, @orig;
+FETCH NEXT FROM cur INTO @codigo, @nombre, @tipo, @uris, @orig, @inicio;
 WHILE @@FETCH_STATUS = 0
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM dbo.cat_aplicacion WHERE codigo = @codigo)
     BEGIN
         INSERT INTO dbo.cat_aplicacion
-            (codigo, nombre, tipo_cliente, redirect_uris_json, origenes_json, estado)
-        VALUES (@codigo, @nombre, @tipo, @uris, @orig, N'activo');
+            (codigo, nombre, tipo_cliente, redirect_uris_json, origenes_json, url_inicio, estado)
+        VALUES (@codigo, @nombre, @tipo, @uris, @orig, @inicio, N'activo');
         PRINT N'-- Aplicacion [' + @codigo + N']';
     END
     ELSE
-        PRINT N'-- Aplicacion [' + @codigo + N'] ya existe';
-    FETCH NEXT FROM cur INTO @codigo, @nombre, @tipo, @uris, @orig;
+    BEGIN
+        -- La `url_inicio` SI se actualiza, a diferencia del `nombre` del cliente. La
+        -- razon es que esta columna la define la forma de servir la app, y esa se
+        -- mueve: si la app pasa de `/login` a otra pagina, o de puerto, el
+        -- lanzador tiene que abrir la nueva. Y no la pisa a ciegas: solo si la que
+        -- tiene la fila esta vacia, o sea si la app todavia no fue declarada
+        -- (es el caso de la base que instalo el `01` y todavia no corrio esta
+        -- semilla). Una `url_inicio` escrita por una persona se respeta.
+        IF ISNULL((SELECT url_inicio FROM dbo.cat_aplicacion WHERE codigo = @codigo), N'') = N''
+        BEGIN
+            UPDATE dbo.cat_aplicacion
+            SET url_inicio = @inicio
+            WHERE codigo = @codigo;
+            PRINT N'-- Aplicacion [' + @codigo + N'] ya existe (url_inicio cargada)';
+        END
+        ELSE
+            PRINT N'-- Aplicacion [' + @codigo + N'] ya existe (url_inicio se respeta)';
+    END
+    FETCH NEXT FROM cur INTO @codigo, @nombre, @tipo, @uris, @orig, @inicio;
 END
 CLOSE cur;
 DEALLOCATE cur;
@@ -336,7 +362,7 @@ PRINT N'--- VERIFICACION · 90-semilla-catalogo ---';
 PRINT N'';
 
 PRINT N'--- 1 · Apps ---';
-SELECT codigo, nombre, tipo_cliente, estado FROM dbo.cat_aplicacion ORDER BY codigo;
+SELECT codigo, nombre, tipo_cliente, url_inicio, estado FROM dbo.cat_aplicacion ORDER BY codigo;
 GO
 
 PRINT N'--- 2 · Clientes ---';

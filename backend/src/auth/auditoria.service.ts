@@ -46,7 +46,61 @@ export type CodigoDetalle =
   | 'scope_invalido'
   | 'app_desconocida'
   | 'usuario_no_habilitado'
-  | 'logout';
+  | 'logout'
+  // Portal lanzador y consentimiento (Fase 07). Los tres son del usuario sobre si
+  // mismo, asi que el `idusuario` de la fila es el suyo y alcanza con el codigo.
+  | 'consentimiento_aceptado'
+  | 'sesion_cerrada_propia'
+  | 'logout_todo'
+  // Cambio de cliente activo (Fase 07). El `detalle` lleva el cliente nuevo, que
+  // no es un campo de la tabla: por eso el `idusuario` solo no alcanza.
+  | 'cambio_de_cliente'
+  // Panel `admin_identidad` (Fase 08). El `idusuario` de estas filas es **el admin**,
+  // que es quien actuo (`specs/01` §7), y el usuario afectado viaja en el `detalle`
+  // con el formato `admin_<operacion>[|usuario=<uuid>][|app=<codigo>]`. Los
+  // prefijos `admin_` no son decorativos: son lo que permite distinguir de un
+  // vistazo una accion de administracion de un login en la lectura del panel.
+  | 'admin_alta_usuario'
+  | 'admin_edita_usuario'
+  | 'admin_reset_clave'
+  | 'admin_habilita_app'
+  | 'admin_deshabilita_app'
+  | 'admin_cierra_sesion'
+  | 'admin_cierra_sesiones_usuario';
+
+/**
+ * `detalle` de una fila: el codigo solo, o el codigo seguido de los
+ * identificadores que hacen falta para que la fila sirva.
+ *
+ * El tipo lo dice con una plantilla literal, no con un `string`: `CodigoDetalle` o
+ * `CodigoDetalle|algo|mas` obliga a que el prefijo sea **uno de la lista cerrada** y
+ * que lo que venga detras sea contexto, nunca otra cosa. Un `string` libre
+ * permitiria escribir `detalle: usuario.pepito` —que es el vector de enumeracion que
+ * este archivo existe para cerrar— sin que TypeScript lo notara.
+ *
+ * El formato es `codigo|k=v|k=v` con los `k` en `snake_case`. Los valores son
+ * identificadores del sistema (`idusuario`, `codigo` de app o de cliente, `sid`),
+ * nunca texto tipeado por alguien.
+ */
+export type DetalleAuditoria = CodigoDetalle | `${CodigoDetalle}|${string}`;
+
+/**
+ * Arma un `detalle` con contexto, descartando los identificadores que no aplican.
+ *
+ * `detalleDe('admin_cierra_sesion', { usuario: id, sid: 'a1b9…' })` produce
+ * `admin_cierra_sesion|usuario=…|sid=…`. Los `undefined` y los `null` no dejan
+ * rastro: un `usuario=` vacio se lee como un dato que se perdio, y en una tabla de
+ * auditoria es peor que un dato que no se escribio.
+ */
+export function detalleDe(
+  codigo: CodigoDetalle,
+  contexto: Record<string, string | null | undefined>,
+): DetalleAuditoria {
+  const partes = Object.entries(contexto)
+    .filter(([, valor]) => Boolean(valor))
+    .map(([clave, valor]) => `${clave}=${valor as string}`);
+  return partes.length === 0 ? codigo : `${codigo}|${partes.join('|')}`;
+}
 
 export interface EventoAuditoria {
   resultado: ResultadoAuditoria;
@@ -54,7 +108,7 @@ export interface EventoAuditoria {
   idaplicacion?: string | null;
   ip: string;
   userAgent: string;
-  detalle?: CodigoDetalle | null;
+  detalle?: DetalleAuditoria | null;
 }
 
 /**

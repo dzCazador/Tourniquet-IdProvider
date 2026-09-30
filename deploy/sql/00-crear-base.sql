@@ -156,6 +156,25 @@ BEGIN
         origenes_json      nvarchar(max)  NOT NULL,
         estado             nvarchar(10)  NOT NULL
                            CONSTRAINT DF_cat_aplicacion_estado DEFAULT N'activo',
+        -- URL donde el lanzador del portal ABRE la app (Fase 07). Es la pagina que
+        -- inicia el flujo OIDC de la app: su `state` y su challenge, no una pagina
+        -- de presentacion.
+        --
+        -- Va REGISTRADA y no deducida del `redirect_uri` a proposito. Deducirla
+        -- (origen + `/login`) parece gratis y no lo es: el dia que una app tenga
+        -- otra convencion de paths, el lanzador abre una URL que no existe y el
+        -- unico sintoma es un 404 del web server del cliente, que no senala al
+        -- IdP. No es un control de seguridad: no se valida ni se compara contra
+        -- nada, es un link que el usuario aprieta. Ver `specs/01` §1.2.
+        --
+        -- DECLARADA AL FINAL, y no junto a las otras de configuracion de la app,
+        -- por una razon mecanica: `ALTER TABLE ADD` siempre agrega la columna al
+        -- final de la tabla, asi que este es el unico lugar donde el camino (A) de
+        -- `specs/02` §5.1 y el camino (B) (los incrementales) pueden dejar las
+        -- columnas en el MISMO orden. `99-verificar-esquema.sql` imprime la huella
+        -- ordenada por `column_id`, y un orden distinto aparece como diferencia
+        -- entre los dos caminos aunque el esquema sea el mismo.
+        url_inicio         nvarchar(1000) NOT NULL,
         CONSTRAINT PK_cat_aplicacion PRIMARY KEY (codigo),
         CONSTRAINT CK_cat_aplicacion_estado CHECK (estado IN (N'activo', N'inactivo')),
         CONSTRAINT CK_cat_aplicacion_tipo CHECK (tipo_cliente IN (N'public'))

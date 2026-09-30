@@ -53,6 +53,8 @@ const args = argumentos();
 const { entorno, configService } = prepararEntorno();
 const BASE = (args.url ?? entorno.TQ_ISSUER).replace(/\/+$/, '');
 const ISSUER = String(entorno.TQ_ISSUER).replace(/\/+$/, '');
+// Base del portal: es donde el authorize manda a pedir el consentimiento (Fase 07).
+const PORTAL = String(entorno.TQ_PORTAL_URL ?? '').replace(/\/+$/, '');
 const APP = args.app ?? 'rhpro';
 const CLIENTE = args.cliente ?? 'marcelino';
 const USUARIO = args.usuario ?? 'admin';
@@ -282,6 +284,10 @@ await prisma.cat_aplicacion.upsert({
     tipo_cliente: 'public',
     redirect_uris_json: JSON.stringify([redirectUri]),
     origenes_json: JSON.stringify([]),
+    // NOT NULL desde el `01-aplicacion-url-inicio.sql`. Va la misma de la app real
+    // porque esta app no se abre nunca (esta inactiva): el valor solo tiene que
+    // existir para que el INSERT no falle.
+    url_inicio: 'http://localhost:3000/login',
     estado: 'inactivo',
   },
 });
@@ -293,7 +299,16 @@ const verifier = randomBytes(32).toString('base64url');
 const challenge = challengeS256(verifier);
 const STATE = 'st-' + randomBytes(6).toString('hex');
 
-async function pedirAuthorize(extra = {}, opciones = cookie) {
+/**
+ * El authorize SIN el salto del consentimiento.
+ *
+ * Es la peticion cruda, y por eso la usan las comprobaciones del consentimiento
+ * (Fase 07): con la sesion central viva, `/oidc/authorize` ya **no** devuelve un
+ * 302 al `redirect_uri` con el `code`, sino un 302 a `/consentimiento` del portal.
+ * Que los criterios de la Fase 03 sigan siendo certainos exige, entonces, que este
+ * script sepa aceptar el consentimiento por el camino que lo haria el portal.
+ */
+async function pedirAuthorizeCrudo(extra = {}, opciones = cookie) {
   const query = new URLSearchParams({
     response_type: 'code',
     client_id: APP,
@@ -310,6 +325,63 @@ async function pedirAuthorize(extra = {}, opciones = cookie) {
     if (valor === 'undefined') query.delete(clave);
   }
   return pedir(`/oidc/authorize?${query}`, opciones);
+}
+
+/**
+ * `POST /oidc/consentir` con los parametros que Mankaron en el 302 del authorize.
+ *
+ * Es exactamente lo que hace el portal cuando el usuario aprieta "Entrar": reenvia
+ * el pedido, con la sesion, y recibe la URL de la app. `cancelar=1` es el caso
+ * contrario del boton "Cancelar": **no** hay endpoint para eso, y que no exista es
+ * el criterio (no se crea sesion de la app, no se emite nada).
+ */
+async function consentir(location, opciones = cookie, cuerpo = {}) {
+  const url = new URL(location);
+  const params = Object.fromEntries(url.searchParams.entries());
+  return pedir('/oidc/consentir', {
+    ...opciones,
+    method: 'POST',
+    headers: { ...(opciones.headers ?? {}), 'content-type': 'application/json' },
+    body: JSON.stringify({ ...params, ...cuerpo }),
+  });
+}
+
+/**
+ * El authorize "completo": el 302 del IdP y, si cae en el consentimiento, la
+ * aceptacion.
+ *
+ * Devuelve la forma que todos los criterios de mas abajo esperan —`status` y
+ * `headers.get('location')` apuntando al `redirect_uri` de la app con el `code`—,
+ * con una diferencia deliberada: el `location` **sintetico** no es el 302 que
+ * devolvio el authorize sino el que salio del `consentir`. Se marca con
+ * `viaConsentimiento`, y los criterios que no lo esperan assertan 400 o un
+ * `access_denied` en el `redirect_uri`, que es donde mueren antes de la pantalla
+ * de consentimiento y por lo tanto llegan intactos.
+ */
+async function pedirAuthorize(extra = {}, opciones = cookie) {
+  const r = await pedirAuthorizeCrudo(extra, opciones);
+  const location = r.headers.get('location') ?? '';
+  if (r.status !== 302 || !location.startsWith(`${PORTAL}/consentimiento`)) {
+    return r;
+  }
+
+  const aceptado = await consentir(location, opciones);
+  if (aceptado.status !== 200 || typeof aceptado.json?.url !== 'string') {
+    return r;
+  }
+
+  const code = new URL(aceptado.json.url).searchParams.get('code');
+  if (code) {
+    secretosEmitidos.push(code);
+  }
+
+  return {
+    status: 302,
+    headers: new Headers({ location: aceptado.json.url }),
+    texto: '',
+    json: null,
+    viaConsentimiento: true,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -450,6 +522,138 @@ verificar('el code queda atado al redirect_uri del authorize', filaCode?.redirec
 verificar('el code expira a 60 s', filaCode ? filaCode.expira_en.getTime() - Date.now() <= 61_000 : false,
   filaCode ? `${Math.round((filaCode.expira_en.getTime() - Date.now()) / 1000)} s` : '');
 verificar('el code nace sin usar', filaCode?.usado_en === null);
+
+// ---------------------------------------------------------------------------
+seccion('Consentimiento (Fase 07): el authorize no emite el code');
+
+/*
+ * Desde la Fase 07 el authorize tiene un paso mas: con sesion central viva no
+ * devuelve un 302 al `redirect_uri`, sino un 302 a `/consentimiento` del portal, y
+ * el `code` sale recien de `POST /oidc/consentir`. Todo lo de arriba sigue valiendo
+ * —los errores mueren antes de la pantalla, asi que llegan al `redirect_uri`— pero
+ * el camino bueno necesita un paso mas, y por eso `pedirAuthorize` lo da.
+ */
+
+const antesDelConsentimiento = await prisma.tok_autorization_code.count();
+
+const crudo = await pedirAuthorizeCrudo();
+const crudoLocation = crudo.headers.get('location') ?? '';
+const crudoUrl = crudoLocation.startsWith(PORTAL) ? new URL(crudoLocation) : null;
+
+verificar('el authorize con sesion responde 302', crudo.status === 302, `HTTP ${crudo.status}`);
+verificar(
+  'y el destino es la pantalla de consentimiento del portal, NO la app',
+  crudoUrl !== null && crudoUrl.pathname === '/consentimiento',
+  crudoLocation.slice(0, 90) || '(sin redireccion)',
+);
+verificar('el pedido llega intacto a la pantalla de consentimiento',
+  crudoUrl?.searchParams.get('client_id') === APP &&
+  crudoUrl?.searchParams.get('redirect_uri') === redirectUri &&
+  crudoUrl?.searchParams.get('state') === STATE &&
+  crudoUrl?.searchParams.get('code_challenge') === challenge,
+  crudoUrl?.search ?? '(sin query)');
+
+verificar('NO se emitio ningun code antes del consentimiento',
+  (await prisma.tok_autorization_code.count()) === antesDelConsentimiento,
+  `${antesDelConsentimiento} → ${await prisma.tok_autorization_code.count()}`);
+
+verificar('el code_verifier nunca viaja en el authorize ni en el consentimiento',
+  !crudoLocation.includes(verifier), 'buscado en la URL completa');
+
+const datos = await pedir(`/oidc/consentimiento?client_id=${APP}`, cookie);
+verificar('GET /oidc/consentimiento con sesion responde 200', datos.status === 200, `HTTP ${datos.status}`);
+verificar('devuelve el nombre de la app y del cliente',
+  datos.json?.app?.codigo === APP && typeof datos.json?.cliente?.nombre === 'string',
+  `${datos.json?.app?.nombre ?? '?'} · ${datos.json?.cliente?.nombre ?? '?'}`);
+verificar('devuelve el NOMBRE de la base de la app (dato de la pantalla de puerta)',
+  typeof datos.json?.base === 'string' || datos.json?.base === null, String(datos.json?.base));
+verificar('NO devuelve host, usuario ni credencial de la base',
+  !/host|usuario|credencial|password/i.test(datos.texto),
+  datos.texto.slice(0, 80));
+
+const datosSinSesion = await pedir(`/oidc/consentimiento?client_id=${APP}`, { headers: {} });
+verificar('sin sesion central → login_required (401)',
+  datosSinSesion.status === 401 && datosSinSesion.json?.error === 'login_required',
+  `HTTP ${datosSinSesion.status} ${datosSinSesion.json?.error ?? ''}`);
+
+const datosAppInactiva = await pedir(`/oidc/consentimiento?client_id=${APP_INACTIVA}`, cookie);
+verificar('app inactiva → unauthorized_client (indistinguible de inexistente)',
+  datosAppInactiva.status === 400 && datosAppInactiva.json?.error === 'unauthorized_client',
+  `HTTP ${datosAppInactiva.status} ${datosAppInactiva.json?.error ?? ''}`);
+
+// --- Aceptar -----------------------------------------------------------------
+const aceptado = await consentir(crudoLocation, cookie);
+verificar('POST /oidc/consentir responde 200 con la URL de la app',
+  aceptado.status === 200 && typeof aceptado.json?.url === 'string', `HTTP ${aceptado.status}`);
+
+const urlAceptada = aceptado.json?.url ? new URL(aceptado.json.url) : null;
+verificar('la URL es el redirect_uri registrado con code y state',
+  urlAceptada !== null &&
+  urlAceptada.origin + urlAceptada.pathname === new URL(redirectUri).origin + new URL(redirectUri).pathname &&
+  urlAceptada.searchParams.get('state') === STATE &&
+  Boolean(urlAceptada.searchParams.get('code')),
+  urlAceptada?.toString().slice(0, 90) ?? '(sin url)');
+
+const filaConsentimiento = await prisma.aud_login.findFirst({
+  where: { detalle: 'consentimiento_aceptado' },
+  orderBy: { id: 'desc' },
+  select: { idusuario: true, idaplicacion: true, resultado: true },
+});
+verificar('la aceptacion queda en aud_login con el idusuario y el idaplicacion',
+  filaConsentimiento?.idusuario === usuario.idusuario && filaConsentimiento?.idaplicacion === APP,
+  filaConsentimiento ? `usuario=${String(filaConsentimiento.idusuario).slice(0, 8)} app=${filaConsentimiento.idaplicacion}` : '(sin fila)');
+verificar('y con resultado=ok (no es un error de seguridad)',
+  filaConsentimiento?.resultado === 'ok', filaConsentimiento?.resultado ?? '(null)');
+
+// --- Lo que NO puede pasar en el consentir ------------------------------------
+const antesDeLosRechazos = await prisma.tok_autorization_code.count();
+
+const redirectAlterado = await consentir(crudoLocation, cookie, { redirect_uri: `${redirectUri}x` });
+verificar('consentir con un redirect_uri distinto al registrado → invalid_request',
+  redirectAlterado.status === 400 && redirectAlterado.json?.error === 'invalid_request',
+  `HTTP ${redirectAlterado.status} ${redirectAlterado.json?.error ?? ''}`);
+
+const sinState = await consentir(crudoLocation, cookie, { state: undefined });
+verificar('consentir sin state → invalid_request',
+  sinState.status === 400 && sinState.json?.error === 'invalid_request',
+  `HTTP ${sinState.status} ${sinState.json?.error ?? ''}`);
+
+const sinPkce = await consentir(crudoLocation, cookie, { code_challenge: 'corto' });
+verificar('consentir con un code_challenge que no es S256 valido → invalid_request',
+  sinPkce.status === 400 && sinPkce.json?.error === 'invalid_request',
+  `HTTP ${sinPkce.status} ${sinPkce.json?.error ?? ''}`);
+
+const sinSesionConsentir = await consentir(crudoLocation, { headers: {} });
+verificar('consentir sin sesion central → login_required (401) y NADA se emite',
+  sinSesionConsentir.status === 401 &&
+  sinSesionConsentir.json?.error === 'login_required' &&
+  (await prisma.tok_autorization_code.count()) === antesDeLosRechazos,
+  `HTTP ${sinSesionConsentir.status} ${sinSesionConsentir.json?.error ?? ''}`);
+
+// El codigo del consentir tiene que servir igual que el de antes del cambio: es el
+// mismo `token.service.ts` y el mismo `code_verifier`.
+const codeConsentido = urlAceptada?.searchParams.get('code') ?? null;
+const canjeConsentido = codeConsentido
+  ? await pedir('/oidc/token', form({
+    grant_type: 'authorization_code',
+    code: codeConsentido,
+    redirect_uri: redirectUri,
+    client_id: APP,
+    code_verifier: verifier,
+  }))
+  : { status: 0, json: null };
+verificar('el code emitido tras aceptar se canjea con el verifier de la app',
+  canjeConsentido.status === 200 && typeof canjeConsentido.json?.access_token === 'string',
+  `HTTP ${canjeConsentido.status}`);
+
+// Cancelar no es un endpoint: no hay nada a donde llamar para rechazar, y por eso
+// el unico rastro de un ingreso sin aceptar es que no se emitio ningun code. Se
+// comprueba que repetir el authorize no deja nada en la base.
+const antesDeCancelar = await prisma.tok_autorization_code.count();
+await pedirAuthorizeCrudo();
+verificar('volver al authorize sin aceptar NO deja code en la base',
+  (await prisma.tok_autorization_code.count()) === antesDeCancelar,
+  `${antesDeCancelar} → ${await prisma.tok_autorization_code.count()}`);
 
 // ---------------------------------------------------------------------------
 seccion('Canje del code: lo que NO puede pasar');

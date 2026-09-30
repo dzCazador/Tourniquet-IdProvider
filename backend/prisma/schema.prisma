@@ -24,11 +24,16 @@ model cat_cliente {
   codigo        String   @id @map("codigo")
   nombre        String   @map("nombre")
   estado        String   @map("estado")
-  politica_json String   @map("politica_json")
+  /// NULL en el DDL (`specs/02` §3). Nullable aca porque el DDL manda: una columna
+  /// declarada NOT NULL aca que en la base es NULL hace fallar **toda** query que no
+  /// la excluya del `select`, y el sintoma (un error de conversion de tipo) no dice
+  /// que el problema es el esquema.
+  politica_json String?  @map("politica_json")
   @@map("cat_cliente")
   aplicaciones         cat_cliente_aplicacion[]        @relation("FK_cat_cliente_aplicacion_cliente")
   membresias           idn_usuario_cliente[]           @relation("FK_idn_usuario_cliente_cliente")
   membresiasAplicacion idn_usuario_cliente_aplicacion[] @relation("FK_idn_uca_cliente")
+  sesiones           tok_sesion[]                  @relation("FK_tok_sesion_cliente")
 }
 
 model cat_aplicacion {
@@ -37,10 +42,14 @@ model cat_aplicacion {
   tipo_cliente       String   @map("tipo_cliente") @default("public")
   redirect_uris_json String   @map("redirect_uris_json")
   origenes_json      String   @map("origenes_json")
+  /// Donde abre el lanzador del portal (Fase 07). Registrada, no deducida del
+  /// `redirect_uri`: ver `specs/01` §1.2. No es un control de seguridad.
+  url_inicio         String   @map("url_inicio")
   estado             String   @map("estado") @default("activo")
   @@map("cat_aplicacion")
   clientes         cat_cliente_aplicacion[]         @relation("FK_cat_cliente_aplicacion_aplicacion")
   membresias       idn_usuario_cliente_aplicacion[] @relation("FK_idn_uca_aplicacion")
+  sesiones         tok_sesion[]                     @relation("FK_tok_sesion_aplicacion")
 }
 
 model cat_cliente_aplicacion {
@@ -58,13 +67,13 @@ model cat_base_datos {
   idaplicacion        String   @map("idaplicacion")
   host                String   @map("host")
   base                 String   @map("base")
-  esquema           String   @map("esquema")
+  esquema           String?  @map("esquema")
   usuario            String   @map("usuario")
   credencial_cifrada  Bytes?   @map("credencial_cifrada")
   engine             String   @map("engine") @default("sqlserver")
-  connection_limit    Int      @map("connection_limit")
+  connection_limit    Int?     @map("connection_limit")
   estado              String   @map("estado") @default("activo")
-  notas               String   @map("notas")
+  notas               String?  @map("notas")
   @@map("cat_base_datos")
   // El indice UNIQUE filtrado (idcliente, idaplicacion) WHERE estado='activo'
   // lo crea deploy/sql/00-crear-base.sql. El proveedor MSSQL de Prisma no
@@ -92,6 +101,7 @@ model idn_usuario {
   @@map("idn_usuario")
   membresias          idn_usuario_cliente[]           @relation("FK_idn_usuario_cliente_usuario")
   membresiasAplicacion idn_usuario_cliente_aplicacion[] @relation("FK_idn_uca_usuario")
+  sesiones             tok_sesion[]                      @relation("FK_tok_sesion_usuario")
 }
 
 model idn_usuario_cliente {
@@ -130,6 +140,14 @@ model tok_sesion {
   cerrada_en      DateTime? @map("cerrada_en")
   motivo_cierre   String?  @map("motivo_cierre")
   @@map("tok_sesion")
+  // Las tres relaciones existen en el SQL (FK_tok_sesion_*) y se declaran aca
+  // porque el portal y el panel las necesitan para pintar el NOMBRE de la app y no
+  // su codigo (`/me/sesiones`, `/admin/sesiones`). Sin ellas habria que hacer una
+  // segunda consulta y un `Map` a mano, que es justo donde se cuela un filtro por
+  // tenant olvidado. Las tres van con NO ACTION, como en el DDL (`specs/02` §2).
+  usuario    idn_usuario    @relation("FK_tok_sesion_usuario", fields: [idusuario], references: [idusuario], onDelete: NoAction, onUpdate: NoAction)
+  cliente    cat_cliente    @relation("FK_tok_sesion_cliente", fields: [idcliente], references: [codigo], onDelete: NoAction, onUpdate: NoAction)
+  aplicacion cat_aplicacion? @relation("FK_tok_sesion_aplicacion", fields: [idaplicacion], references: [codigo], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model tok_autorization_code {

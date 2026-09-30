@@ -10,6 +10,8 @@ implica cambiar este spec y el `.env.example`, no sólo el código.
 | `/.well-known/openid-configuration` | GET | Discovery. `issuer` canónico con `https://` en producción |
 | `/.well-known/jwks.json` | GET | Claves públicas RS256 activas + últimas 2 retiradas (ventana de solapamiento) |
 | `/oidc/authorize` | GET | Pantalla de login/consentimiento (el portal); valida `client_id`, `redirect_uri` **exacto**, `state`, `code_challenge` (S256 obligatorio) |
+| `/oidc/consentir` | POST | Aceptación del consentimiento: revalida el pedido completo y **recién ahí** emite el `code` (§1.1) |
+| `/oidc/consentimiento` | GET | Datos para pintar la pantalla de consentimiento: nombre de la app, cliente y base. Sesión central obligatoria |
 | `/oidc/token` | POST | Intercambio `authorization_code` → tokens; y `refresh_token` → access nuevo (rotación) |
 | `/oidc/revoke` | POST | Revoca un token (RFC 7009) |
 | `/oidc/logout` | GET/POST | `post_logout_redirect_uri` del registro de la app; mata la sesión central (`sid`) |
@@ -26,6 +28,47 @@ contraseña en un POST de API ajena al login del portal.
 misma lista del `redirect_uri`. RFC 9457 pide una lista propia; agregar `post_logout_redirect_
 uris_json` es un cambio de esquema, y hasta que exista la limitación es que una app sólo puede
 volver del logout a un URI que ya tenía registrado como callback.
+
+### 1.1 El authorize no emite el `code`: pide consentimiento primero
+
+Con sesión central viva, `GET /oidc/authorize` **valida el pedido entero y no emite nada**: responde
+**302** a `<TQ_PORTAL_URL>/consentimiento` con los mismos parámetros. El `code` se emite recién
+cuando el portal hace `POST /oidc/consentir` con ese mismo pedido.
+
+Por qué el consentimiento es del IdP y no del lanzador: el lanzador es una pantalla, se puede
+saltar entrando por la app. Si el IdP no fuera el que exige la aceptación, "el usuario aceptó
+entrar a RHPro" sería una fila de auditoría escrita por un portal al que se puede llegar sin
+aceptar nada, y el control real (que es la habilitación en `idn_usuario_cliente_aplicacion`)
+quedaría separado de la pantalla que lo explica.
+
+Por qué el `code` se emite tarde y no en el authorize: un modal de consentimiento sobre la misma
+pantalla del authorize se rompe con un F5 —el `code` ya se consumió— y deja al usuario en un estado
+raro. Con el consentimiento en su propia ruta, el pedido se puede repetir, cancelar y volver a
+intentar, y el `code` no existe hasta que hubo una respuesta.
+
+**Lo que el portal puede alterar del pedido entre el authorize y el `consentir` es todo, y no
+importa**: `POST /oidc/consentir` revalida `client_id` (activa), `redirect_uri` (**exacto**),
+`code_challenge` (formato S256), `scope`, la sesión central y la habilitación del usuario, en el
+mismo orden que el authorize. Lo único que no se puede reconstruir es el `code_verifier`, que vive
+en el navegador de la app: si el portal cambiara el `code_challenge`, el canje de la app falla por
+PKCE. El `code_challenge` es un hash público por definición, no un secreto que haya que proteger.
+
+La aceptación se audita en `aud_login` (`detalle = consentimiento_aceptado`) con el `idaplicacion`
+de la app. Cancelar no deja rastro en `tok_sesion` ni emite nada: no hay sesión de la app que
+matar.
+
+### 1.2 El `code_verifier` es de la app, y por eso el lanzador abre la app
+
+En PKCE el `code_challenge` lo crea **el cliente que va a canjear el `code`**, y el `code` vuelve
+al `redirect_uri` de ese mismo cliente (`specs/01` §1). De ahí sale, sin ninguna opción de diseño
+de por medio: **el deep-link del lanzador abre la app, y la app inicia su propio flujo** (su
+`state`, su challenge, su callback, su canje). El portal no puede canjear por la app —no tiene el
+verifier— ni pasarle el verifier —sería mandarle el secreto del canje en la barra de direcciones,
+donde queda en el historial y en el `Referer`—.
+
+Por eso la URL de arranque de la app es un dato **registrado** (`cat_aplicacion.url_inicio`,
+`specs/02` §3) y no uno derivado del `redirect_uri`: el lanzador abre lo que la app declaró, y si
+una app se mueve, se cambia el registro y no el portal.
 
 ## 2. Modelo de claims
 
@@ -154,6 +197,15 @@ sólo el `.env`.
   nunca con DELETE desde código de negocio.
 - Toda escritura de auditoría pasa con el `sub` real de la sesión (no admite "sistema" salvo
   rotación de claves y expiración por job).
+- **Acciones de administración: el `idusuario` es el admin, y el afectado viaja en el `detalle`.**
+  `idusuario` es la columna que se consulta ("qué hizo este usuario"), y lo que vale es quién
+  **actuó**: un `alta_usuario` escrita con el `idusuario` del altaado haría que un admin se
+  atribuyera a sí mismo la creación de una cuenta ajena, y una baja de permisos sería
+  indistingible de un login. El afectado y el contexto van en el `detalle`, que es
+  `nvarchar(500)` y sigue siendo un **código corto con datos estructurados**, nunca un volcado del
+  input: `admin_alta_usuario|usuario=<uuid>|app=<codigo>`. Es el mismo criterio que el resto de la
+  columna —"qué pasó, no el valor de lo que se tipeó"— con los identificadores que hacen falta
+  para que la fila sirva.
 
 ## 8. MFA (diseño cerrado, activación Fase 04)
 

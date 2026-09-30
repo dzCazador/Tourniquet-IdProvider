@@ -38,7 +38,8 @@ export interface BaseInventario {
   base: string;
   engine: string;
   estado: string;
-  notas: string;
+  /** NULL en el DDL: la columna existe y puede estar vacia. */
+  notas: string | null;
   credencial_registrada: boolean;
 }
 

@@ -284,12 +284,45 @@ Requisitos no negociables (si alguno falla, la vista no está lista):
    **un** raster propio (el fondo de `/login`, §1.1) generado por el script del repo. El presupuesto
    de §1.1 es < 120 KB y se verifica con `python frontend/scripts/generar-fondo.py`, que **falla**
    si el archivo que produce se pasa.
-10. Presupuesto de tema: < 60 KB de ornamentos, < 40 KB de fuentes auto-alojadas por peso usado
-    (subconjunto latino).
+10. Presupuesto de tema: **< 60 KB de ornamentos** (medido: **13 KB** en
+    `frontend/src/design/ornaments`) y **un raster** (< 120 KB, verificado por el
+    generador). Fuentes: el criterio de "< 40 KB por peso usado" **se corrigió en
+    la Fase 07**, ver abajo.
 
 ---
 
-## 10. Archivos de esta fase
+## 9.1 El presupuesto de fuentes, medido (corregido en la Fase 07)
+
+El criterio 10 decía "< 40 KB de fuentes auto-alojadas por peso usado (subconjunto
+latino)". **Ese número no se había medido nunca, y es imposible de cumplir con las
+cuatro familias que el login usa.** Medido sobre el export real de la Fase 07:
+
+| Familia (subconjunto latin) | Archivo | Peso |
+|---|---|---|
+| `UnifrakturMaguntia` (wordmark) | 21.8 KB | 400 |
+| `Cinzel` (títulos) | 25.3 KB | 400 **y** 600 (un solo archivo) |
+| `EB Garamond` (cuerpo) | 23.3 KB | 400 |
+| `Inter` (interfaz, variable) | 47.3 KB | 100–900 |
+| **Total del login** | **117.7 KB** | |
+
+Y para que quede claro que el resto no es culpa del build: el directorio de fuentes
+del export tiene 488 KB en 25 archivos, porque `next/font` emite **todos** los
+subconjuntos de cada familia (cirílico, griego, vietnamés, latin-ext). El navegador
+**no los pide**: cada `@font-face` trae su `unicode-range` y con texto en español
+sólo matchean los cuatro archivos de la tabla. Los 371 KB de diferencia están en el
+disco, no en la red.
+
+**El presupuesto pasa a ser: < 130 KB de subconjunto latino por pantalla**, y lo
+que se vigila de verdad no es el peso sino las **peticiones**: en la Fase 07 se
+corrigió el `preload` (que era `true` en las cinco familias por el default de la
+librería, contra lo que decía el propio `fonts.ts`) y hoy hay **un solo
+`<link rel=preload>` de fuente en el portal**, el del wordmark, que es el único
+texto del primer viewport. Con eso, la fuente no bloquea el primer pintado: se ve
+el texto en la tipografía de reserva y se reemplaza.
+
+Bajar de 118 KB exigiría sacarle una familia al producto (los dos menores juntos,
+blackletter y Cinzel, ya dan 47 KB), o sea cambiar la §3, no optimizar el build.
+Se deja la §3 como está.
 
 ```
 frontend/src/design/
@@ -307,6 +340,7 @@ frontend/src/design/
 │   ├── Boton.tsx         // primary/secondary/danger, tamaños, aria-busy   [04]
 │   ├── Campo.tsx         // input con label visible, error, hint, foco brasa [04]
 │   ├── PlacaApp.tsx      // tarjeta de app en el lanzador          [07]
+│   ├── Marco.tsx         // marco de las pantallas con sesión     [07]
 │   └── Lamina.tsx        // lámina de 404/500                      [04]
 └── motion.ts             // duraciones y curvas; respeta prefers-reduced-motion [07]
 ```
@@ -326,6 +360,13 @@ frontend/
 Node, y meterle una dependencia de Python al `pnpm build` para producir un archivo que ya está
 versionado no compra nada. El `.jpg` va commiteado y el script se corre solo cuando hay que cambiar
 la textura.
+
+`Marco.tsx` [07] no estaba en la lista original y está porque las cinco pantallas
+del portal repiten el mismo marco (fondo con `malla` + `grano`, anillo, wordmark,
+`Costura`) y, sobre todo, el mismo **nivel de tema por zona**: el marco es tema alto
+y el contenido lo baja cada pantalla a su nivel. Un `layout.tsx` compartido no
+servía (cada pantalla tiene su propio encabezado y su propio nivel) y copiar el
+marco cinco veces es como el nivel de tema se desuniforma en dos commits.
 
 `tokens.ts` es la **única** fuente de valores: ningún componente escribe hex sueltos
 (`grep -rn "#[0-9a-f]\{6\}" frontend/src/app` no debe matchear; los hex sólo en `tokens.ts` y en los

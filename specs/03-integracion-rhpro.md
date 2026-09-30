@@ -72,8 +72,14 @@ Detalles:
 ## 5. Alta de una app nueva (guía genérica)
 
 1. **SQL** (deploy del cliente / `tourniquet_dev`): `INSERT cat_aplicacion` (código, redirect
-   URIs, orígenes CORS) + `cat_cliente_aplicacion` por cada tenant que la usa + las filas
-   `cat_base_datos` que correspondan como inventario.
+   URIs, orígenes CORS, **url_inicio**) + `cat_cliente_aplicacion` por cada tenant que la usa + las
+   filas `cat_base_datos` que correspondan como inventario.
+   - `url_inicio` es la página donde el lanzador del portal abre la app, y es la que **inicia el
+     flujo OIDC de la app** (su `state` y su challenge), no una página de presentación: si
+     apunta a `/` y la app manda a `/login` en un 302, el usuario ve el login de todos modos;
+     conviene apuntar a la página de ingreso.
+   - El alta de una app no se hace desde la UI: es un cambio de deploy, con su versión y su
+     responsable.
 2. **App**: frontend con el intercambio PKCE (helper estándar `oauth4webapi` o `openid-client`
    en el backend Nest que hace de *confidential-lite* si la app no quiere token en el browser);
    backend Nest copia el patrón del guard dual de RHPro con su `TQ_AUDIENCE`.
