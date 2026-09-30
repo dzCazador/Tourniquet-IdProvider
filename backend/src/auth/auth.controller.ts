@@ -15,10 +15,13 @@ import {
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { sidDeLaPeticion, escribirCookieDeSesion, borrarCookieDeSesion } from '../oidc/cookies';
-import { SesionService } from '../oidc/sesion.service';
+import { AMR_CON_MFA, SesionService } from '../oidc/sesion.service';
 import { AuditoriaService, detalleDe } from './auditoria.service';
 import { LoginDto } from './dto/login.dto';
+import { VerificarMfaDto } from './dto/mfa.dto';
 import { IdentidadService } from './identidad.service';
+import { MfaDesafioService, MAX_INTENTOS_MFA } from './mfa-desafio.service';
+import { MfaService } from './mfa.service';
 import { ErrorPortal, PortalService, type EstadoSesion } from './portal.service';
 import { validarReturnTo } from './return-to';
 
@@ -96,6 +99,8 @@ export class AuthController {
     private readonly portal: PortalService,
     private readonly sesiones: SesionService,
     private readonly auditoria: AuditoriaService,
+    private readonly mfa: MfaService,
+    private readonly desafios: MfaDesafioService,
   ) {}
 
   @Post('login')
@@ -152,6 +157,60 @@ export class AuthController {
       dto.cliente,
     );
 
+    // --- Segundo factor (specs/01 §8) --------------------------------------
+    //
+    // Va DESPUES de resolver el cliente y no antes, por una razón que es de
+    // seguridad y no de orden: si el MFA se pidiera antes de resolver el tenant,
+    // un usuario de un cliente que no existe en esta instalacion recibira un
+    // "ingresa tu codigo" y no un 403, o sea que la respuesta pasa a depender de
+    // si tiene MFA. Y va antes de crear la sesion, que es lo importante: con
+    // `mfa_estado='on'` no queda fila en `tok_sesion` ni cookie, y un ingreso a
+    // medias no deja nada con que quedarse adentro.
+    //
+    // `mfa_estado='pending'` NO pide nada (specs/01 §8.1): el usuario al que se
+    // le activa MFA sigue entrando con la clave hasta confirmar.
+    const mfa = await this.mfa.estadoDe(verificado.usuario.idusuario);
+
+    if (mfa.estado === 'on') {
+      const desafio = await this.desafios.crear(
+        verificado.usuario.idusuario,
+        cliente.idcliente,
+        destino.destino,
+        { ip, userAgent: req.get('user-agent') ?? 'desconocido' },
+      );
+
+      // Fila propia, y no una modificacion de la del login: "la clave de esta
+      // persona es correcta y el factor no" es un evento distinto de "entro", y
+      // sin esta fila un ataque de fuerza bruta contra el segundo factor es
+      // indistinguible de una clave mala en la lectura del panel.
+      await this.auditoria.registrarSeguro({
+        resultado: 'ok',
+        idusuario: verificado.usuario.idusuario,
+        idaplicacion: null,
+        ip,
+        userAgent: req.get('user-agent') ?? 'desconocido',
+        detalle: detalleDe('mfa_requerido', {
+          cliente: cliente.idcliente,
+          factor: desafio.id.slice(0, 8),
+        }),
+      });
+
+      this.logger.log(
+        `login con segundo factor usuario=${verificado.usuario.usuario} ` +
+          `cliente=${cliente.idcliente} factor=${desafio.id.slice(0, 8)}`,
+      );
+
+      res.status(HttpStatus.OK).json({
+        requiere_mfa: true,
+        factor_id: desafio.id,
+        expira_en: desafio.expira_en.toISOString(),
+        intentos_restantes: MAX_INTENTOS_MFA,
+        codigos_restantes: mfa.codigos_restantes,
+        aviso_pocos: mfa.aviso_pocos,
+      });
+      return;
+    }
+
     const sesion = await this.portal.iniciarSesion(verificado.usuario.idusuario, cliente.idcliente, {
       ip,
       userAgent: req.get('user-agent') ?? 'desconocido',
@@ -172,6 +231,174 @@ export class AuthController {
       nombre: `${verificado.usuario.nombre} ${verificado.usuario.apellido}`.trim(),
       clienteActual: cliente,
       returnTo: destino.destino,
+    });
+  }
+
+  /**
+   * `POST /auth/mfa/verify`: el **segundo paso** del login con segundo factor
+   * (`specs/01` §8.2).
+   *
+   * Recibe dos cosas y nada más: el `factor_id` y el código. El usuario, el
+   * cliente y el destino salen de la fila de `tok_mfa_challenge`, que los
+   * escribió el backend en el paso 1. Por eso un F5 en la pantalla de
+   * verificación no rompe el ingreso, y por eso el cliente no puede nombrar a
+   * otro tenant aunque quiera (invariante de `AGENTS.md`).
+   *
+   * **Acá se crea la sesión.** El paso 1 no dejó fila en `tok_sesion` ni cookie:
+   * un `mfa_estado='on'` sin código no tiene nada detrás.
+   *
+   * El `amr` de la sesión es `pwd,mfa`, y de ahí sale el `amr` de la sesión de
+   * cada app y del access token (`specs/01` §2.1).
+   *
+   * La IP y el user agent que se auditan son los del **paso 1** (los de la fila
+   * del desafío) y no los de este pedido: son los del ingreso que se está
+   * completando, y un segundo pedido podría venir con una IP distinta si hay un
+   * proxy en el medio. La fila también es lo que evita que el cliente elija qué
+   * IP se escribe en la auditoría.
+   */
+  @Post('mfa/verify')
+  async verificarMfa(
+    @Body() dto: VerificarMfaDto,
+    @Req() req: Request,
+    @Res() res: Response,
+    @Ip() ip: string,
+  ): Promise<void> {
+    noStore(res);
+
+    const encontrado = await this.desafios.vigente(dto.factor_id);
+
+    if (!('desafio' in encontrado)) {
+      // `usado` es `replay` y el resto es `error`. Un `factor_id` que ya se
+      // consumio es alguien que esta reintentando el canje del segundo factor, y
+      // eso va con el resultado que existe para eso en el CHECK de `aud_login`.
+      const reuso = encontrado.motivo === 'usado';
+
+      await this.auditoria.registrarSeguro({
+        resultado: reuso ? 'replay' : 'error',
+        // NULL y no un idusuario: el desafio rechazado puede no existir, y sin
+        // fila no hay de quien sacar el `idusuario` sin inventarlo.
+        idusuario: null,
+        idaplicacion: null,
+        ip,
+        userAgent: req.get('user-agent') ?? 'desconocido',
+        detalle: detalleDe('mfa_desafio_invalido', {
+          motivo: encontrado.motivo,
+          factor: dto.factor_id.slice(0, 8),
+        }),
+      });
+
+      this.logger.warn(`desafio MFA rechazado motivo=${encontrado.motivo}`);
+
+      throw new ErrorPortal('mfa_desafio_invalido', HttpStatus.UNAUTHORIZED, {
+        mensaje: 'La verificacion del segundo factor expiro. Volve a ingresar.',
+      });
+    }
+
+    const desafio = encontrado.desafio;
+    const verificado = await this.mfa.verificarCodigo(desafio.idusuario, dto.codigo);
+
+    if (!verificado.ok) {
+      // El usuario fue dado de baja entre los dos pasos: el panel cierra las
+      // sesiones al desactivar, pero no puede cerrar un ingreso que todavia no
+      // existe (trampa 6 de la fase 09).
+      if (verificado.motivo === 'usuario_inactivo') {
+        await this.auditoria.registrarSeguro({
+          resultado: 'error',
+          idusuario: desafio.idusuario,
+          idaplicacion: null,
+          ip: desafio.ip,
+          userAgent: desafio.user_agent,
+          detalle: detalleDe('mfa_desafio_invalido', { motivo: 'usuario_inactivo' }),
+        });
+        throw new ErrorPortal('inactivo', HttpStatus.UNAUTHORIZED, {
+          mensaje: 'Usuario dado de baja.',
+        });
+      }
+
+      const restantes = await this.desafios.registrarIntentoFallido(desafio.id);
+
+      await this.auditoria.registrarSeguro({
+        resultado: 'claves',
+        idusuario: desafio.idusuario,
+        idaplicacion: null,
+        ip: desafio.ip,
+        userAgent: desafio.user_agent,
+        // El motivo va en el detalle porque `reutilizado` y `codigo_incorrecto`
+        // son cosas distintas: uno es un codigo espiado en el limite de la
+        // ventana, y el otro es que el usuario se equivoco al tipear.
+        detalle: detalleDe('mfa_incorrecto', { motivo: verificado.motivo, factor: desafio.id.slice(0, 8) }),
+      });
+
+      this.logger.warn(
+        `codigo MFA incorrecto usuario=${desafio.idusuario.slice(0, 8)} ` +
+          `motivo=${verificado.motivo} intentos_restantes=${restantes}`,
+      );
+
+      throw new ErrorPortal('mfa_incorrecto', HttpStatus.UNAUTHORIZED, {
+        mensaje:
+          restantes > 0
+            ? 'El codigo no coincide.'
+            : 'Se agotaron los intentos. Volve a ingresar.',
+        intentos_restantes: restantes,
+      });
+    }
+
+    // De un solo uso: si otra peticion gano la carrera, esta cae y no crea
+    // sesion. Sin esto, dos verificaciones del mismo `factor_id` con el mismo
+    // codigo de recuperacion abririan dos sesiones.
+    if (!(await this.desafios.marcarUsado(desafio.id))) {
+      await this.auditoria.registrarSeguro({
+        resultado: 'replay',
+        idusuario: desafio.idusuario,
+        idaplicacion: null,
+        ip: desafio.ip,
+        userAgent: desafio.user_agent,
+        detalle: detalleDe('mfa_desafio_invalido', { motivo: 'usado', factor: desafio.id.slice(0, 8) }),
+      });
+      throw new ErrorPortal('mfa_desafio_invalido', HttpStatus.UNAUTHORIZED, {
+        mensaje: 'La verificacion del segundo factor expiro. Volve a ingresar.',
+      });
+    }
+
+    const usuario = await this.identidad.datosDe(desafio.idusuario);
+    if (!usuario) {
+      throw new ErrorPortal('inactivo', HttpStatus.UNAUTHORIZED, { mensaje: 'Usuario dado de baja.' });
+    }
+
+    const cliente = await this.portal.nombreDeCliente(desafio.idcliente);
+    const sesion = await this.portal.iniciarSesion(
+      desafio.idusuario,
+      desafio.idcliente,
+      { ip: desafio.ip, userAgent: desafio.user_agent },
+      AMR_CON_MFA,
+    );
+
+    escribirCookieDeSesion(req, res, sesion.sid);
+
+    await this.auditoria.registrarSeguro({
+      resultado: 'ok',
+      idusuario: desafio.idusuario,
+      idaplicacion: null,
+      ip: desafio.ip,
+      userAgent: desafio.user_agent,
+      detalle: detalleDe('mfa_ok', {
+        cliente: desafio.idcliente,
+        metodo: verificado.metodo,
+        factor: desafio.id.slice(0, 8),
+      }),
+    });
+
+    this.logger.log(
+      `login con MFA ok usuario=${usuario.usuario} cliente=${desafio.idcliente} ` +
+        `metodo=${verificado.metodo} sid=${sesion.sid.slice(0, 8)}`,
+    );
+
+    res.status(HttpStatus.OK).json({
+      usuario: usuario.usuario,
+      nombre: `${usuario.nombre} ${usuario.apellido}`.trim(),
+      clienteActual: cliente,
+      returnTo: desafio.return_to,
+      codigos_restantes: verificado.codigos_restantes,
     });
   }
 

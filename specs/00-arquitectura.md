@@ -89,6 +89,32 @@ casos:
 deploy, ningún heartbeat de la app remota. Si alguna vez hace falta, es un spec propio: sería
 salud de despliegue, que es un dominio distinto del de identidad.
 
+### 4.2 La interfaz de export para el TenantRegistry (Fase 09)
+
+Dos endpoints de lectura, para un `admin_identidad` de ese cliente, y **sin credenciales**:
+
+| Endpoint | Devuelve |
+|---|---|
+| `GET /registry/bases/:tenant` | Inventario de bases de negocio: `codigo`, `idcliente`, `idaplicacion`, `host`, `base`, `engine`, `estado`, `notas` y el booleano `credencial_registrada` |
+| `GET /registry/aplicaciones/:tenant` | Apps del cliente con su base activa: `codigo`, `nombre`, `url_inicio`, `estado` y `base` (el **nombre** de la base, o `null`) |
+
+Las reglas que los gobiernan, y que son la mitad del contrato:
+
+1. **El `:tenant` del path es un filtro, no una autorización.** La sesión del portal dice quién
+   pregunta; lo que ese usuario puede ver de *ese* cliente se decide contra `idn_usuario_cliente`,
+   con el rol releído de la base en cada pedido y sin caché (invariante de `AGENTS.md`).
+2. **Ninguno de los dos devuelve `usuario` ni credencial.** `credencial_registrada` es un
+   booleano que responde "¿esta base ya tiene contraseña?" sin decir cuál. Los tipos de la
+   respuesta (`BaseInventario`, `AplicacionInventario`) no declaran esos campos, que es la única
+   forma de que no salgan por accidente.
+3. **El 403 es el mismo** para "no sos admin", "no sos miembro" y "ese cliente no existe".
+
+**El desencripto de credenciales sigue sin diseño, y no se implementa.** No hay ningún endpoint
+que devuelva contraseñas de bases de negocio, en esta fase ni en ninguna otra. Cuando el
+TenantRegistry de RHPro se ejecute, ese mecanismo se diseña con su propio spec, y probablemente
+sea out-of-band: un archivo, el gestor de secretos del cliente, o un cliente de servicio a
+servicio. Queda anotado como pendiente, no como supuesto.
+
 ## 5. Modelo de confianza
 
 - Tourniquet **no** accede a las bases de negocio de las apps. Registra sus datos de conexión
@@ -110,7 +136,11 @@ salud de despliegue, que es un dominio distinto del de identidad.
 | RF/rotación de claves mal hecha | Tokens válidos tras rotación o sesión rota | `kid` explícito, ventana de solapamiento JWKS, procedimiento en specs/01 §5 |
 
 ## 7. Fuera de alcance (por ahora)
-- MFA con segundo factor real (esquelto de columna `mfa_secret`, activación Fase 04).
+- ~~MFA con segundo factor real~~ **Hecho en la Fase 09** (TOTP + códigos de recuperación,
+  `specs/01` §8). Lo que la MFA **no** hace y sigue sin hacer: no es recuperación de cuenta (sin
+  correo, sin SMS, sin "¿olvidé mi código?"), no protege el egreso (cerrar sesión sigue siendo
+  sólo el click), y el enrolamiento lo dispara un `admin_identidad` desde el panel, no el usuario
+  solo.
 - Federación saliente (login con cuenta Microsoft o Google del cliente) — posible sobre D1, no
   diseñada. Queda registrada como **mejora a futuro** en
   `specs/todo/begin/README.md` § *Federación, si algún día*, con las cuatro decisiones que hay que

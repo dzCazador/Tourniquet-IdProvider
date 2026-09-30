@@ -4,7 +4,7 @@
 --
 -- QUE ES ESTE SCRIPT
 --   Estado COMPLETO y vigente de la base de control. Crea la base si no existe y
---   las 12 tablas `cat_*` / `idn_*` / `tok_*` / `aud_*` con sus indices, tal como los define `specs/02-base-de-datos.md`.
+--   las 14 tablas `cat_*` / `idn_*` / `tok_*` / `aud_*` con sus indices, tal como los define `specs/02-base-de-datos.md`.
 --   Es el que se usa para:
 --     - instalar una instalacion nueva de un cliente (Fase 10);
 --     - reconstruir una base destruida;
@@ -269,6 +269,12 @@ BEGIN
         mfa_secret_cifrada  varbinary(512) NULL,
         mfa_estado          nvarchar(10)  NOT NULL
                             CONSTRAINT DF_idn_usuario_mfa_estado DEFAULT N'off',
+        -- Ultimo PERIODO de TOTP aceptado (floor(epoch/30)), no un timestamp: la
+        -- ventana +-1 del reloj (specs/01 §8) hace que un codigo valido en el
+        -- periodo N tambien valida en N+1, asi que sin esto un codigo espiado en
+        -- el limite serviria dos veces. Un periodo <= a este se rechaza aunque el
+        -- codigo sea correcto. NULL = todavia no se acepto ninguno.
+        mfa_ultimo_periodo  bigint        NULL,
         estado              nvarchar(10)  NOT NULL
                             CONSTRAINT DF_idn_usuario_estado DEFAULT N'activo',
         intentos_fallidos   int           NOT NULL
@@ -342,6 +348,41 @@ BEGIN
             ON DELETE NO ACTION ON UPDATE NO ACTION
     );
     PRINT N'-- Creada dbo.idn_usuario_cliente_aplicacion';
+END
+GO
+
+-- idn_usuario_mfa_codigo: codigos de RECUPERACION del segundo factor (Fase 09).
+-- 10 por usuario, de un solo uso, hasheados. El hash es
+-- `sha256(codigo_normalizado + idusuario)`: sha256 CON SAL por usuario, porque 10
+-- caracteres de un alfabeto de 28 son ~48 bits y un sha256 pelado deja el ataque
+-- por diccionario a un atacante con una GPU. La sal es el mismo `idusuario` que ya
+-- viaja en el claim `sub` (publico a proposito: lo que evita es la tabla
+-- precalculada, no esconder el UUID).
+--
+-- El codigo en claro NUNCA se persiste ni sale por API: la unica vez que existe es
+-- la respuesta que lo genera, una sola vez, como la `clave_temporal` de la Fase 08.
+IF OBJECT_ID(N'dbo.idn_usuario_mfa_codigo', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.idn_usuario_mfa_codigo
+    (
+        id          bigint IDENTITY(1,1) NOT NULL,
+        idusuario   uniqueidentifier   NOT NULL,
+        -- sha256 hex (64 caracteres exactos). UNIQUE: es la unica forma de
+        -- encontrar el codigo, y sin unicidad dos filas con el mismo hash harian
+        -- que "usar el codigo" sea ambiguo.
+        codigo_hash nvarchar(64)       NOT NULL,
+        creado_en   datetime2(3)       NOT NULL
+                    CONSTRAINT DF_idn_mfa_codigo_creado DEFAULT sysutcdatetime(),
+        -- Un solo uso: NULL = vigente. "Vencidos" no hay, se regeneran.
+        usado_en    datetime2(3)       NULL,
+        CONSTRAINT PK_idn_usuario_mfa_codigo PRIMARY KEY (id),
+        -- CASCADE como las otras dos hijas de `idn_usuario`: un codigo de
+        -- recuperacion sin usuario no significa nada.
+        CONSTRAINT FK_idn_mfa_codigo_usuario
+            FOREIGN KEY (idusuario) REFERENCES dbo.idn_usuario (idusuario)
+            ON DELETE CASCADE ON UPDATE NO ACTION
+    );
+    PRINT N'-- Creada dbo.idn_usuario_mfa_codigo';
 END
 GO
 
@@ -537,6 +578,66 @@ BEGIN
                               N'rotado', N'reemplazado'))
     );
     PRINT N'-- Creada dbo.tok_refresh_token';
+END
+GO
+
+-- tok_mfa_challenge: estado de un LOGIN EN CURSO que todavia no es sesion (Fase 09).
+--
+-- Vive en `tok_` y no en `idn_` porque su vida es la del intento, no la de la
+-- persona: si el estado del segundo factor viviera en `idn_usuario`, un login a
+-- medias y un segundo factor recien enrolado se pisarian.
+--
+-- Guarda el `idcliente` y el `return_to` YA RESUELTOS del paso 1, y esa es la
+-- parte que importa: `POST /auth/mfa/verify` no manda usuario, ni cliente, ni
+-- destino, asi que no hay nada que el cliente pueda nombrar por su cuenta
+-- (invariante de `AGENTS.md`) y un F5 en la pantalla de verificacion no rompe el
+-- ingreso.
+IF OBJECT_ID(N'dbo.tok_mfa_challenge', N'U') IS NULL
+BEGIN
+    CREATE TABLE dbo.tok_mfa_challenge
+    (
+        -- Es el `factor_id` que viaja en la respuesta del login. Lo genera la app
+        -- (crypto.randomUUID()); el SQL no depende de newid().
+        id            uniqueidentifier NOT NULL,
+        idusuario     uniqueidentifier   NOT NULL,
+        idcliente     nvarchar(20)       NOT NULL,
+        -- Destino ya validado por `validarReturnTo`, relativo al issuer. El ancho
+        -- es el tope de `MAX_LONGITUD` de `auth/return-to.ts`, no uno inventado
+        -- acá: si el destino legitimo no entra, el login con MFA deja de poder
+        -- volver al authorize.
+        return_to     nvarchar(2048)     NOT NULL,
+        ip            nvarchar(45)       NOT NULL,
+        user_agent    nvarchar(500)      NOT NULL,
+        creado_en     datetime2(3)       NOT NULL
+                      CONSTRAINT DF_tok_mfa_challenge_creado DEFAULT sysutcdatetime(),
+        -- 5 minutos. Es lo que alcanza para que una persona saque el telefono, y
+        -- es lo que hace que un `factor_id` que se filtra por un log no sirva de
+        -- nada sin el codigo y despues de poco tiempo.
+        expira_en     datetime2(3)       NOT NULL,
+        -- Intentos de codigo incorrecto. 5 la matan y el usuario tiene que volver
+        -- a ingresar. NO se suman a `idn_usuario.intentos_fallidos`: son dos
+        -- bloqueos distintos, y mezclarlos dejaria a un usuario con la clave
+        -- correcta bloqueado por teclear mal un codigo.
+        intentos      smallint           NOT NULL
+                      CONSTRAINT DF_tok_mfa_challenge_intentos DEFAULT 0,
+        -- Un solo uso: en cuanto se verifica bien, la fila queda marcada.
+        usado_en      datetime2(3)       NULL,
+        CONSTRAINT PK_tok_mfa_challenge PRIMARY KEY (id),
+        -- NO ACTION hacia el usuario y el cliente, como las demas `tok_`: un
+        -- login a medias es un evento que se mira, no algo que se borre en cascada
+        -- cuando se da de baja la cuenta.
+        CONSTRAINT FK_tok_mfa_challenge_usuario
+            FOREIGN KEY (idusuario) REFERENCES dbo.idn_usuario (idusuario)
+            ON DELETE NO ACTION ON UPDATE NO ACTION,
+        CONSTRAINT FK_tok_mfa_challenge_cliente
+            FOREIGN KEY (idcliente) REFERENCES dbo.cat_cliente (codigo)
+            ON DELETE NO ACTION ON UPDATE NO ACTION,
+        -- Solo el piso. El tope de 5 es una politica de la app
+        -- (MAX_INTENTOS_MFA), no del esquema: si manana sube a 5 sin tocar el SQL,
+        -- el CHECK no puede tapar el valor legitimo.
+        CONSTRAINT CK_tok_mfa_challenge_intentos CHECK (intentos >= 0)
+    );
+    PRINT N'-- Creada dbo.tok_mfa_challenge';
 END
 GO
 
@@ -739,10 +840,55 @@ BEGIN
 END
 GO
 
+-- Codigos de recuperacion (Fase 09). El UNIQUE del hash es la busqueda del codigo
+-- que tipea el usuario; el segundo responde "¿cuantos le quedan?" sin recorrer los
+-- ya usados.
+IF NOT EXISTS (SELECT 1 FROM sys.indexes
+               WHERE name = N'UQ_idn_usuario_mfa_codigo_hash'
+                 AND object_id = OBJECT_ID(N'dbo.idn_usuario_mfa_codigo'))
+BEGIN
+    CREATE UNIQUE INDEX UQ_idn_usuario_mfa_codigo_hash
+        ON dbo.idn_usuario_mfa_codigo (codigo_hash);
+    PRINT N'-- Indice UQ_idn_usuario_mfa_codigo_hash';
+END
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes
+               WHERE name = N'IX_idn_usuario_mfa_codigo_usuario'
+                 AND object_id = OBJECT_ID(N'dbo.idn_usuario_mfa_codigo'))
+BEGIN
+    CREATE INDEX IX_idn_usuario_mfa_codigo_usuario
+        ON dbo.idn_usuario_mfa_codigo (idusuario, usado_en);
+    PRINT N'-- Indice IX_idn_usuario_mfa_codigo_usuario';
+END
+GO
+
+-- Desafios de MFA: el job 95 los purga cada 5 min por `expira_en`, y el indice por
+-- `idusuario` sirve para el diagnostico de un login que se quedo a medias.
+IF NOT EXISTS (SELECT 1 FROM sys.indexes
+               WHERE name = N'IX_tok_mfa_challenge_expira'
+                 AND object_id = OBJECT_ID(N'dbo.tok_mfa_challenge'))
+BEGIN
+    CREATE INDEX IX_tok_mfa_challenge_expira
+        ON dbo.tok_mfa_challenge (expira_en);
+    PRINT N'-- Indice IX_tok_mfa_challenge_expira';
+END
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.indexes
+               WHERE name = N'IX_tok_mfa_challenge_usuario'
+                 AND object_id = OBJECT_ID(N'dbo.tok_mfa_challenge'))
+BEGIN
+    CREATE INDEX IX_tok_mfa_challenge_usuario
+        ON dbo.tok_mfa_challenge (idusuario, creado_en DESC);
+    PRINT N'-- Indice IX_tok_mfa_challenge_usuario';
+END
+GO
+
 
 -- =============================================================================
 -- BLOQUE 4 · Verificacion
--- Imprime el estado real del esquema recien aplicado. Debe dar 12 tablas OK,
+-- Imprime el estado real del esquema recien aplicado. Debe dar 14 tablas OK,
 -- 0 ausentes, 0 columnas faltantes.
 -- =============================================================================
 SET NOCOUNT ON;
@@ -752,10 +898,10 @@ PRINT N'';
 PRINT N'=== VERIFICACION · 00-crear-base.sql ===';
 PRINT N'';
 
--- 4.1 Las 12 tablas esperadas. Se vuelca en una #temporal porque el
+-- 4.1 Las 14 tablas esperadas. Se vuelca en una #temporal porque el
 -- veredicto final (lote 4.5) la necesita y las #temporales si sobreviven al GO,
 -- a diferencia de las variables.
-PRINT N'--- 1 · Tablas esperadas (deben ser 12) ---';
+PRINT N'--- 1 · Tablas esperadas (deben ser 14) ---';
 IF OBJECT_ID(N'tempdb..#tablas_esperadas') IS NOT NULL DROP TABLE #tablas_esperadas;
 SELECT
     e.nombre                                            AS tabla,
@@ -764,9 +910,9 @@ INTO #tablas_esperadas
 FROM (VALUES
     (N'cat_cliente'), (N'cat_aplicacion'), (N'cat_cliente_aplicacion'),
     (N'cat_base_datos'), (N'idn_usuario'), (N'idn_usuario_cliente'),
-    (N'idn_usuario_cliente_aplicacion'), (N'tok_sesion'),
-    (N'tok_autorization_code'), (N'tok_refresh_token'),
-    (N'tok_clave_firma'), (N'aud_login')
+    (N'idn_usuario_cliente_aplicacion'), (N'idn_usuario_mfa_codigo'),
+    (N'tok_sesion'), (N'tok_autorization_code'), (N'tok_refresh_token'),
+    (N'tok_mfa_challenge'), (N'tok_clave_firma'), (N'aud_login')
 ) AS e(nombre)
 LEFT JOIN sys.tables t ON t.name = e.nombre AND t.schema_id = SCHEMA_ID(N'dbo')
 ORDER BY e.nombre;
@@ -862,8 +1008,8 @@ DECLARE @filtrados INT = (SELECT COUNT(*) FROM #filtrados);
 DECLARE @texto_cifrado INT = (SELECT COUNT(*) FROM #cifrado
                               WHERE veredicto LIKE N'FALLA%');
 
-PRINT N'Tablas propias   : ' + CAST(@tablas AS NVARCHAR(10)) + N' / 12'
-      + CASE WHEN @tablas = 12 AND @ausentes = 0 THEN N'   OK'
+PRINT N'Tablas propias   : ' + CAST(@tablas AS NVARCHAR(10)) + N' / 14'
+      + CASE WHEN @tablas = 14 AND @ausentes = 0 THEN N'   OK'
              ELSE N'   FALTA: ' + ISNULL(@faltantes, N'?') END;
 PRINT N'Indices filtrados : ' + CAST(@filtrados AS NVARCHAR(10)) + N' / 5'
       + CASE WHEN @filtrados = 5 THEN N'   OK' ELSE N'   REVISAR' END;
@@ -871,10 +1017,10 @@ PRINT N'Cifrado en texto  : ' + CAST(@texto_cifrado AS NVARCHAR(10))
       + CASE WHEN @texto_cifrado = 0 THEN N'   OK (todo binario)'
              ELSE N'   FALLA: material cifrado guardado como texto' END;
 
-IF @tablas <> 12 OR @ausentes > 0 OR @texto_cifrado > 0
+IF @tablas <> 14 OR @ausentes > 0 OR @texto_cifrado > 0
 BEGIN
     DECLARE @msg NVARCHAR(600) =
-        N'Esquema incompleto: ' + CAST(@tablas AS NVARCHAR(10)) + N'/12 tablas'
+        N'Esquema incompleto: ' + CAST(@tablas AS NVARCHAR(10)) + N'/14 tablas'
         + CASE WHEN @faltantes IS NOT NULL
                THEN N'. Faltan: ' + @faltantes ELSE N'' END
         + CASE WHEN @texto_cifrado > 0

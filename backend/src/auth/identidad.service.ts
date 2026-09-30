@@ -447,6 +447,38 @@ export class IdentidadService {
     };
   }
 
+  /**
+   * Los datos públicos de un usuario, o `null` si ya no existe.
+   *
+   * Lo usa el **segundo paso** del login con MFA (`POST /auth/mfa/verify`), que
+   * no vuelve a pasar por `verificar` porque la clave ya se verificó en el paso 1
+   * y verificarla de nuevo gastaría otro argon2 por un ingreso que ya va por la
+   * mitad. Es el mismo `select` que devuelve `verificar` en el camino feliz, así
+   * que la respuesta del login es idéntica con y sin segundo factor.
+   *
+   * `null` es un caso real (el usuario fue borrado entre los dos pasos) y se
+   * distingue de "existe pero está inactivo", que lo ve `verificarCodigo` del
+   * `MfaService`.
+   */
+  async datosDe(idusuario: string): Promise<UsuarioSesion | null> {
+    const fila = await this.prisma.idn_usuario.findUnique({
+      where: { idusuario },
+      select: { idusuario: true, usuario: true, nombre: true, apellido: true, email: true },
+    });
+
+    if (!fila) {
+      return null;
+    }
+
+    return {
+      idusuario: fila.idusuario,
+      usuario: fila.usuario,
+      nombre: fila.nombre,
+      apellido: fila.apellido,
+      email: fila.email,
+    };
+  }
+
   private async auditar(
     resultado: 'ok' | 'claves' | 'bloq' | 'error',
     idusuario: string | null,

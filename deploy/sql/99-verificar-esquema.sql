@@ -32,6 +32,15 @@
 --      o un cambio en el 00 que no llego a ningun incremental. Se corrige el
 --      que falte y se repite. NO se "arregla" la huella a mano: se corrige el SQL.
 --
+-- POR QUE LAS CUATRO FAMILIAS
+--   El filtro es `cat_ | idn_ | tok_ | aud_`, los cuatro prefijos de funcion de
+--   `specs/02` §2.1. Hasta la Fase 09 este script filtraba SOLO `cat[_]%`, y el
+--   defecto era invisible en el resultado: un incremental que agregara una tabla,
+--   una columna o un indice de `idn_`, `tok_` o `aud_` pasaba la comparacion sin
+--   aparecer en ninguno de los dos lados, y la "cero diferencias" era cierta
+--   porque la huella no miraba. La Fase 09 es la primera que agrega tablas fuera de
+--   `cat_`, asi que tambien es la que hizo visible el agujero.
+--
 -- POR QUE NO COMPARA DATOS
 --   Este script compara ESQUEMA. Los datos (semillas, usuarios) no se comparan:
 --   sus credenciales las genera el usuario en su instalacion, por lo que sus
@@ -80,7 +89,8 @@ JOIN sys.types ty   ON ty.user_type_id = c.user_type_id
 LEFT JOIN sys.default_constraints dc ON dc.parent_object_id = c.object_id
                                     AND dc.parent_column_id = c.column_id
 WHERE t.schema_id = SCHEMA_ID(N'dbo')
-  AND t.name LIKE N'cat[_]%'
+  AND (t.name LIKE N'cat[_]%' OR t.name LIKE N'idn[_]%'
+       OR t.name LIKE N'tok[_]%' OR t.name LIKE N'aud[_]%')
 ORDER BY t.name, c.column_id;
 GO
 
@@ -98,20 +108,28 @@ SELECT
         CASE WHEN i.has_filter = 1 THEN N' (FILTERED)' ELSE N'' END +
         CASE WHEN i.is_unique = 0 AND i.is_primary_key = 0 THEN N' (NONUNIQUE)' ELSE N'' END +
         N' cols: ' +
-        STUFF((SELECT ', ' + COL_NAME(ic.object_id, ic.column_id)
+        STUFF((SELECT N', ' + COL_NAME(ic.object_id, ic.column_id)
                      + CASE WHEN ic.is_descending_key = 1 THEN N' DESC' ELSE N'' END
                FROM sys.index_columns ic
                WHERE ic.object_id = i.object_id
+                 -- `index_id` NO es opcional: sin este filtro el `STUFF` recorre
+                 -- las columnas de TODOS los indices de la tabla y las imprime en
+                 -- cada fila. La comparacion entre bases seguiria dando cero
+                 -- diferencias --el mismo defecto en los dos lados--, pero el
+                 -- informe diria que el PK de una tabla tiene cuatro columnas,
+                 -- que es justo el dato que alguien viene a mirar.
+                 AND ic.index_id = i.index_id
                  AND ic.index_column_id = ic.key_ordinal
                  AND ic.is_included_column = 0
                ORDER BY ic.key_ordinal
-               FOR XML PATH('')), 1, 2, '') +
+               FOR XML PATH('')), 1, 2, N'') +
         CASE WHEN i.has_filter = 1 THEN N' WHERE ' + i.filter_definition ELSE N'' END
                                      AS detalle
 FROM sys.indexes i
 JOIN sys.tables t ON t.object_id = i.object_id
 WHERE t.schema_id = SCHEMA_ID(N'dbo')
-  AND t.name LIKE N'cat[_]%'
+  AND (t.name LIKE N'cat[_]%' OR t.name LIKE N'idn[_]%'
+       OR t.name LIKE N'tok[_]%' OR t.name LIKE N'aud[_]%')
   AND i.name IS NOT NULL
 ORDER BY t.name, i.name;
 GO
@@ -126,11 +144,18 @@ SELECT
     N'FK'                 AS tipo,
     t.name                AS objeto,
     fk.name               AS nombre,
-    c.name                                   + N' -> ' +
-    OBJECT_NAME(fk.referenced_object_id)    + N'(' +
-    COL_NAME(fk.referenced_object_id, fk.referenced_column_id) + N')' +
-    N' ON DELETE ' + fk.delete_referential_action_desc +
-    N' ON UPDATE ' + fk.update_referential_action_desc
+    -- La columna REFERIDA sale de `sys.foreign_key_columns`, NO de
+    -- `sys.foreign_keys.referenced_column_id`: en SQL Server 2022 (probado en la
+    -- 16.0.1000.6, Express) esa columna no resuelve y la consulta entera muere con
+    -- Msg 207 "El nombre de columna 'referenced_column_id' no es valido". Los
+    -- `CAST(... AS NVARCHAR) COLLATE DATABASE_DEFAULT` evitan el Msg 451 de
+    -- conflicto de intercalacion entre el nvarchar de catalogo
+    -- (Latin1_General_CI_AS_KS_WS) y el de la base.
+    c.name COLLATE DATABASE_DEFAULT                   + N' -> ' +
+    CAST(OBJECT_NAME(fk.referenced_object_id) AS NVARCHAR(200)) + N'(' +
+    COL_NAME(fk.referenced_object_id, fkc.referenced_column_id) + N')' +
+    N' ON DELETE ' + CAST(fk.delete_referential_action_desc AS NVARCHAR(200)) +
+    N' ON UPDATE ' + CAST(fk.update_referential_action_desc AS NVARCHAR(200))
                                      AS detalle
 FROM sys.foreign_keys fk
 JOIN sys.tables t        ON t.object_id = fk.parent_object_id
@@ -138,7 +163,8 @@ JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
 JOIN sys.columns c        ON c.object_id = fkc.parent_object_id
                           AND c.column_id = fkc.parent_column_id
 WHERE t.schema_id = SCHEMA_ID(N'dbo')
-  AND t.name LIKE N'cat[_]%'
+  AND (t.name LIKE N'cat[_]%' OR t.name LIKE N'idn[_]%'
+       OR t.name LIKE N'tok[_]%' OR t.name LIKE N'aud[_]%')
 ORDER BY t.name, fk.name;
 GO
 
@@ -152,11 +178,12 @@ SELECT
     N'CHECK'              AS tipo,
     t.name                AS objeto,
     cc.name               AS nombre,
-    REPLACE(REPLACE(cc.definition, N'[', N''), N']', N'') AS detalle
+    REPLACE(REPLACE(CAST(cc.definition AS NVARCHAR(4000)), N'[', N''), N']', N'') AS detalle
 FROM sys.check_constraints cc
 JOIN sys.tables t ON t.object_id = cc.parent_object_id
 WHERE t.schema_id = SCHEMA_ID(N'dbo')
-  AND t.name LIKE N'cat[_]%'
+  AND (t.name LIKE N'cat[_]%' OR t.name LIKE N'idn[_]%'
+       OR t.name LIKE N'tok[_]%' OR t.name LIKE N'aud[_]%')
 ORDER BY t.name, cc.name;
 GO
 

@@ -1,7 +1,7 @@
 # `deploy/` — SQL de la base de control
 
 La base de control de Tourniquet es **una base propia y separada** (`tourniquet` en producción,
-`tourniquet_dev` en desarrollo) con las 12 tablas `cat_*` / `idn_*` / `tok_*` / `aud_*`. No comparte esquema con las bases de
+`tourniquet_dev` en desarrollo) con las 14 tablas `cat_*` / `idn_*` / `tok_*` / `aud_*`. No comparte esquema con las bases de
 negocio de las apps: Tourniquet no se conecta a ellas, sólo las registra como inventario
 (D3 de `specs/00-arquitectura.md`).
 
@@ -62,10 +62,14 @@ reglas: idempotencia, numeración, qué no va en un `.sql`.
 
 | Archivo | Qué es | Quién lo ejecuta |
 |---|---|---|
-| `00-crear-base.sql` | Crea la base si no existe + las 12 tablas + índices. Estado completo y vigente | **El usuario** (crea bases) |
+| `00-crear-base.sql` | Crea la base si no existe + las 14 tablas + índices. Estado completo y vigente | **El usuario** (crea bases) |
 | `_reset-dev.sql` | **DESTRUCTIVO.** Borra la base de desarrollo (MDF y LDF incluidos) y la deja vacía. Sólo para probar el esquema desde cero | **El usuario**, con `-v CONFIRMAR="BORRAR"` |
 | `_plantilla-incremental.sql` | Guía de cómo se escribe un incremental. **No se ejecuta** | — |
+| `01-aplicacion-url-inicio.sql` | Agrega `cat_aplicacion.url_inicio` (Fase 07) | Agente (sólo dev) o usuario |
+| `02-sesion-motivo-cierre-admin.sql` | Los cinco motivos de cierre que elige una persona (Fase 08) | Agente (sólo dev) o usuario |
+| `03-mfa-segundo-factor.sql` | `idn_usuario_mfa_codigo`, `tok_mfa_challenge` y `mfa_ultimo_periodo` (Fase 09) | Agente (sólo dev) o usuario |
 | `90-semilla-catalogo.sql` | Catálogo: apps, clientes, vínculos e inventario de bases (4 de RHPro). Sin usuarios, sin credenciales | Agente (sólo dev) o usuario |
+| `95-job-codigos.sql` … `98-job-sesiones.sql` | Los cuatro jobs de limpieza y retención (Fase 09). **Se agendan, no se corren a mano** | **Agendados por el usuario** (SQL Agent o Planificador de tareas) |
 | `99-verificar-esquema.sql` | Imprime la huella del esquema para comparar los caminos (A) y (B) | Cualquiera (es de sólo lectura) |
 
 Los archivos con `_` inicial no se ejecutan nunca en automático: son guías o, en el caso de
@@ -105,10 +109,10 @@ alguien lo corra contra `tourniquet` —el IdP de un cliente, con sus usuarios y
 el IdP entero. Un script de creación que puede borrar la base que está por crear no es un
 script de creación.
 
-**Los incrementales `01-` a `89-` no existen todavía**: la base se crea por primera vez con el
-`00-crear-base.sql`, así que todavía no hubo ningún cambio que se haya. El primero que aparezca en
-el historial del repo es el primero de la serie. Un número retirado no se reutiliza nunca: una
-base que aplicó el `07` no puede recibir después un `07` distinto.
+Los incrementales existen desde la Fase 07: `01-aplicacion-url-inicio.sql` (Fase 07),
+`02-sesion-motivo-cierre-admin.sql` (Fase 08) y `03-mfa-segundo-factor.sql` (Fase 09). Un número
+retirado no se reutiliza nunca: una base que aplicó el `03` no puede recibir después un `03`
+distinto. El siguiente incremental de la Fase 10 es el `04`.
 
 ### Numeración
 
@@ -216,20 +220,33 @@ sqlcmd -S <srv> -d base_A -i deploy/sql/99-verificar-esquema.sql -W -s "|" -o hu
 
 # Camino B: base nueva, incrementales en orden
 sqlcmd -S <srv> -d base_B -i deploy/sql/00-crear-base.sql
-sqlcmd -S <srv> -d base_B -i deploy/sql/01-<cambio>.sql
-# ... y así con todos
+sqlcmd -S <srv> -d base_B -i deploy/sql/01-aplicacion-url-inicio.sql
+sqlcmd -S <srv> -d base_B -i deploy/sql/02-sesion-motivo-cierre-admin.sql
+sqlcmd -S <srv> -d base_B -i deploy/sql/03-mfa-segundo-factor.sql
 sqlcmd -S <srv> -d base_B -i deploy/sql/99-verificar-esquema.sql -W -s "|" -o huella_B.txt
 
-# Comparar (la línea 2 es el nombre de la base: única diferencia admisible)
---        diff <(tail -n +7 huella_A.txt) <(tail -n +7 huella_B.txt)
---   5b. `+7` porque las 6 primeras lineas son encabezado: las 3 primeras cambian
---       en cada corrida (base y timestamp) y no son parte de la huella. Comparar
---       desde la linea 2 daria siempre una diferencia y haria creer que los
---       caminos divergen cuando no divergen.
+# Comparar, salteando el encabezado (que lleva base y timestamp)
+diff <(tail -n +7 huella_A.txt) <(tail -n +7 huella_B.txt)
 ```
 
 Cero diferencias = la regla se está cumpliendo. Si hay diferencias, el SQL que falta está en
 uno de los dos caminos: se corrige **el SQL**, nunca la huella.
+
+> **`+7` y el encabezado.** Las primeras líneas son encabezado (`-- base:`, `-- generado:`) y
+> cambian en cada corrida. Con `tail -n +7` se comparan **sólo** las filas de la huella.
+>
+> **Lo que se corrigió en la Fase 09, y por qué importa:** hasta esa fase el filtro de este
+> script era `t.name LIKE N'cat[_]%'`, o sea que la huella **sólo miraba las tablas `cat_`**. Un
+> incremental que agregara una columna o una tabla de `idn_`/`tok_`/`aud_` pasaba la comparación
+> sin aparecer en ninguno de los dos lados: la "cero diferencias" era cierta porque la huella
+> no miraba. La Fase 09 es la primera que agrega tablas fuera de `cat_`, y también la que hizo
+> visible el agujero. Ver `specs/02` §5.1.
+>
+> **Sin base nueva no se puede correr la comparación completa**, porque el runner nunca crea
+> bases. La Fase 09 verificó la convergencia de otra forma, que es válida y más barata: aplicó
+> `00-crear-base.sql` (que es idempotente) sobre la base del camino (B) y comparó la huella
+> antes y después. Cero diferencias = al `00` no le falta nada que los incrementales hayan dejado. Lo que
+> **no** prueba eso es el `00` sobre una base vacía, que es el criterio de la Fase 10.
 
 ## Qué compara la huella
 
@@ -275,11 +292,33 @@ negativo es criterio de aceptación de la Fase 01, y es la que más importa de e
 
 ## Jobs (95-98)
 
-Los jobs de limpieza de `tok_autorization_code` vencido y de retención de `aud_login` van
-como SQL en este directorio (`95-`, `96-`, `97-`, `98-`) y los **crea y agenda el usuario** en
-SQL Agent. La app no borra auditoría nunca: append-only (`specs/01` §7).
+Los jobs de limpieza y retención van como SQL en este directorio (`95-` a `98-`) y los
+**crea y agenda el usuario**. La app no borra nada de esto desde código de negocio:
+`aud_login` es append-only y `tok_sesion` se cierra, no se borra (`specs/01` §7, §7.1).
 
-Todavía no existen; llegan con la Fase 09.
+| Script | Qué | Frecuencia |
+|---|---|---|
+| `95-job-codigos.sql` | Borra `tok_autorization_code` vencido hace más de 1 día y `tok_mfa_challenge` vencido | cada 5 min |
+| `96-job-refresh.sql` | Borra `tok_refresh_token` **revocado** hace más de 90 días (los vencidos se conservan) | diaria |
+| `97-job-auditoria.sql` | Borra `aud_login` con `ts` de más de 2 años, por lotes de 5000 | mensual |
+| `98-job-sesiones.sql` | **Marca** `cerrada_en`/`motivo_cierre='expirada'` en las sesiones vencidas. No borra | cada hora |
+
+**Cómo se agendan, y por qué hay dos instrucciones:** los cuatro son T-SQL puro,
+idempotentes y sin `USE`, así que se agendan igual en las dos variantes:
+
+| Motor del cliente | Agendador |
+|---|---|
+| SQL Server completo | **SQL Agent**: un trabajo por `.sql`, con su propia frecuencia |
+| **SQL Server Express** (no tiene Agente) | **Planificador de tareas de Windows** + `deploy/jobs/ejecutar-jobs.cmd`, que corre los cuatro con `sqlcmd` |
+
+El procedimiento completo —cuenta de servicio, autenticación, permisos mínimos del
+usuario de SQL y el paso exacto del Planificador— está en
+**`deploy/runbooks/jobs-limpieza.md`**. La cuenta que los corre **no necesita
+`TQ_MASTER_KEY`**: son `DELETE` acotados por fecha sobre la base de control, y no
+hablan con la aplicación.
+
+Los `.sql` **no se aplican a mano** como parte de la instalación: se agendar. Un
+job de retención que se corre una vez a mano es un job que se olvidó.
 
 ---
 
@@ -287,12 +326,13 @@ Todavía no existen; llegan con la Fase 09.
 
 `deploy/runbooks/` lleva la documentación de operación que acompaña al SQL:
 
-| Runbook | Contenido | Cuándo |
+| Runbook | Contenido | Estado |
 |---|---|---|
+| `jobs-limpieza.md` | Los cuatro jobs de retención: qué corre, con qué frecuencia, y **cómo agendarlos en SQL Agent o en el Planificador de tareas** (SQL Server Express) | ✅ Fase 09 |
+| `rotacion-claves.md` | Rotación de claves de firma: los 5 pasos, la verificación y el rollback | ✅ Fase 09 |
 | `instalacion.md` | De cero a login funcionando, con el orden exacto de los `.sql` | Fase 10 |
 | `backup-restore.md` | Backup de la base y de la master key **por separado**, y restore probado | Fase 10 |
 | `rollback.md` | Cómo deshacer cada paso de la instalación | Fase 10 |
-| `rotacion-claves.md` | Procedimiento de rotación de claves de firma | Fase 09 |
 
 El detalle importante de los backups: la base se respalda, la master key **no viaja con ella**
 (`TQ_MASTER_KEY` vive en el gestor de secretos del cliente). Si se pierde, no hay restore

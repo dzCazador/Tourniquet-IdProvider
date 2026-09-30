@@ -6,6 +6,25 @@ import { enDias, enHoras, REFRESH_TTL_DIAS, SESION_PORTAL_TTL_HORAS, SESION_TTL_
 export type MotivoCierre = 'logout' | 'revocada' | 'replay' | 'expirada';
 
 /**
+ * `amr` de una sesion en la que solo se verifico la contrasena.
+ *
+ * Es el valor por defecto de `sesionDePortal` y el unico que existia antes de la
+ * Fase 09. Vive aca y no como literal en el controller porque `amr` se escribe en
+ * la columna `tok_sesion.amr`, se lee en el claim del token y se muestra en el
+ * panel de sesiones: son tres lugares con la misma lista cerrada, y una constante
+ * es lo que evita que uno de ellos escriba `pwd` y otro `pwd,mfa` para lo mismo.
+ */
+export const AMR_SOLO_CLAVE = 'pwd';
+
+/**
+ * `amr` de una sesion en la que se verifico clave **y** segundo factor.
+ *
+ * El orden importa: es el de `specs/01` §2, y una app que compara el array como
+ * cadena (o que lo muestra) tiene que ver siempre lo mismo.
+ */
+export const AMR_CON_MFA = 'pwd,mfa';
+
+/**
  * Motivos que elige **una persona** al forzar el cierre desde el panel de
  * `admin_identidad` (Fase 08 §5).
  *
@@ -250,11 +269,21 @@ export class SesionService {
   }
 
   /**
-   * Sesion central del portal. La crea `POST /auth/login` (Fase 04); este metodo
-   * existe desde ya para que el camino de login y el de authorize compartan la
-   * misma regla de vida y nobody tenga que inventarse la suya.
+   * Sesion central del portal. La crea `POST /auth/login` (Fase 04) o
+   * `POST /auth/mfa/verify` (Fase 09, cuando el segundo factor esta activo);
+   * este metodo existe desde ya para que el camino de login y el de authorize
+   * compartan la misma regla de vida y nobody tenga que inventarse la suya.
+   *
+   * `amr` entra por parametro y no se hardcodea: la sesion del portal es la
+   * que viaja al authorize, y de ahi el `amr` de la sesion de la app al token
+   * (`specs/01` §2.1 y §8). Con MFA verificado es `pwd,mfa`; sin MFA, `pwd`.
    */
-  async sesionDePortal(idusuario: string, idcliente: string, ctx: ContextoSesion): Promise<Sesion> {
+  async sesionDePortal(
+    idusuario: string,
+    idcliente: string,
+    ctx: ContextoSesion,
+    amr: string = AMR_SOLO_CLAVE,
+  ): Promise<Sesion> {
     const ahora = new Date();
     return this.prisma.tok_sesion.create({
       data: {
@@ -262,7 +291,7 @@ export class SesionService {
         idusuario,
         idcliente,
         idaplicacion: null,
-        amr: 'pwd',
+        amr,
         ip: ctx.ip,
         user_agent: (ctx.userAgent || 'desconocido').slice(0, 500),
         creado_en: ahora,

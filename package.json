@@ -11,7 +11,10 @@
     "alta:usuario": "node scripts/alta-usuario.mjs",
     "registrar:base": "node scripts/registrar-base.mjs",
     "resetear:clave": "node scripts/resetear-clave.mjs",
+    "rotar:clave": "node scripts/rotar-clave.mjs",
     "verificar:clave": "node scripts/verificar-clave.mjs",
+    "verificar:mfa": "node scripts/verificar-mfa.mjs",
+    "verificar:rotacion": "node scripts/verificar-rotacion.mjs",
     "verificar:oidc": "node scripts/verificar-oidc.mjs",
     "verificar:portal": "node scripts/verificar-portal.mjs"
   }

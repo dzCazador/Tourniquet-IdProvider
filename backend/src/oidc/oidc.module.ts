@@ -4,6 +4,8 @@ import { AuthController } from '../auth/auth.controller';
 import { PortalService } from '../auth/portal.service';
 import { ClavesModule } from '../claves/claves.module';
 import { FirmaService, JwkFirma } from '../claves/firma.service';
+import { OperacionController } from '../claves/operacion.controller';
+import { OperadorGuard } from '../claves/operacion.guard';
 import { AplicacionService } from './aplicacion.service';
 import { AuthorizeController } from './authorize.controller';
 import { AuthorizeService } from './authorize.service';
@@ -41,11 +43,13 @@ const TTL_JWKS_INTERNO_MS = 60 * 1000;
  * endpoint, para que el canje, la revocacion y el logout compartan exactamente
  * las mismas reglas de cierre de sesion.
  *
- * `AuthController` es la excepcion y esta a proposito: `/auth/login` escribe
- * una fila de `tok_sesion` y la cookie que la apunta sale de `oidc/cookies.ts`,
- * asi que el controlador necesita a `SesionService`, que es provider de aca. Se
- * declara desde este modulo para no hacer `AuthModule <-> OidcModule`
- * circular. El archivo vive en `auth/`; ver el comentario del controlador.
+ * `AuthController` y `OperacionController` son las dos excepciones, y por el
+ * mismo motivo concreto: los dos necesitan services que son provider de **este**
+ * módulo y no del suyo (`AuthController` → `SesionService` de acá;
+ * `OperacionController` → `PortalService` de acá, vía su guard). Declararlos en
+ * su propio módulo crearía `AuthModule <-> OidcModule` y
+ * `ClavesModule <-> OidcModule` circulares. Los archivos viven en `auth/` y
+ * `claves/`; ver el comentario de cada controlador.
  */
 @Module({
   imports: [ClavesModule, AuthModule],
@@ -58,10 +62,17 @@ const TTL_JWKS_INTERNO_MS = 60 * 1000;
     LogoutController,
     UserinfoController,
     AuthController,
+    // `/operacion/claves`: la rotacion de las claves de firma, que es de la
+    // INSTALACION y no de un tenant (`specs/01` §5.1). Se declara desde aca, y no
+    // en `ClavesModule`, por la misma razon que `AuthController`: su guard
+    // necesita `PortalService`, que es provider de este modulo, y meterlo en
+    // `ClavesModule` crearia la dependencia circular `ClavesModule <-> OidcModule`.
+    OperacionController,
   ],
   providers: [
     AplicacionService,
     SesionService,
+    OperadorGuard,
     PortalService,
     ClaimsService,
     JtiCacheService,

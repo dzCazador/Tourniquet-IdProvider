@@ -1,7 +1,11 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../prisma/prisma.service';
-import { SesionService, type Sesion } from '../oidc/sesion.service';
+import {
+  AMR_SOLO_CLAVE,
+  SesionService,
+  type Sesion,
+} from '../oidc/sesion.service';
 import type { UsuarioSesion } from './identidad.service';
 import { clientIdDelReturnTo } from './return-to';
 
@@ -36,6 +40,18 @@ export type CodigoPortal =
   | 'sin_cliente'
   | 'cliente_ambiguo'
   | 'cliente_no_pertenece'
+  // Segundo factor (Fase 09, `specs/01` §8.2). Los dos son del login en dos
+  // pasos y ninguno distingue el motivo del rechazo: un `mfa_desafio_invalido` es
+  // "volvé a ingresar" este mismo segundo, diga el desafío que se venció, que ya
+  // se usó o que no exista. Separar los cuatro en la respuesta le daría a un
+  // atacante que tiene un `factor_id` un oráculo de qué pasa con las filas.
+  | 'mfa_incorrecto'
+  | 'mfa_desafio_invalido'
+  // Cuenta, no ingreso: `POST /me/mfa/confirmar` cuando el usuario no esta en
+  // `pending`. Va en esta lista y no en el `CodigoRegistro` de `registro/` porque
+  // los endpoints `/me/*` hablan el contrato del portal (`ErrorPortal`, con
+  // `mensaje`) y el front los lee con el mismo `aErrorPortal` que el login.
+  | 'mfa_no_pendiente'
   | 'error';
 
 export interface ResumenCliente {
@@ -50,6 +66,14 @@ export interface RespuestaError {
   bloqueado_hasta?: string;
   /** Segundos. Solo en `rate_limit`: evita el "reintente en un momento". */
   reintento_seg?: number;
+  /**
+   * Intentos de código que le quedan. **Solo en `mfa_incorrecto`.** Se manda
+   * porque el usuario decide si reintenta ahora o vuelve a ingresar, y sin esto
+   * la única forma de saberlo es fallar cinco veces. No es información de
+   * ataque: saber cuántos intentos quedan del **propio** desafío no dice nada
+   * del estado de la cuenta, y el desafío muere en el quinto.
+   */
+  intentos_restantes?: number;
   /**
    * Solo en `cliente_ambiguo`: los clientes del usuario, para que el portal
    * ofrezca elegir en vez de dejarlo en un callejon sin salida. Son **solo los
@@ -222,13 +246,22 @@ export class PortalService {
     });
   }
 
-  /** Crea la fila de sesion del portal (`idaplicacion IS NULL`). */
+  /**
+   * Crea la fila de sesion del portal (`idaplicacion IS NULL`).
+   *
+   * El `amr` va por parametro porque depende de **que se verifico en este
+   * ingreso**: con el segundo factor activo, `POST /auth/mfa/verify` pasa
+   * `pwd,mfa` y `POST /auth/login` nunca llega aca con MFA encendido
+   * (`specs/01` §8.2). El default `pwd` esta para los llamadores que no tienen
+   * segundo factor en el camino.
+   */
   async iniciarSesion(
     idusuario: string,
     idcliente: string,
     ctx: { ip: string; userAgent: string },
+    amr: string = AMR_SOLO_CLAVE,
   ): Promise<Sesion> {
-    return this.sesiones.sesionDePortal(idusuario, idcliente, ctx);
+    return this.sesiones.sesionDePortal(idusuario, idcliente, ctx, amr);
   }
 
   /**
@@ -409,6 +442,34 @@ export class PortalService {
       cliente: { idcliente: destino.idcliente, nombre: destino.nombre },
       cambio: true,
     };
+  }
+
+  /**
+   * Nombre de un cliente **activo**, o `null`.
+   *
+   * Lo usa el segundo paso del login con MFA: el `idcliente` viene de la fila del
+   * desafío (lo resolvió `resolverCliente` en el paso 1 contra las membresías del
+   * usuario) y acá sólo se busca el nombre para la respuesta.
+   *
+   * El filtro `estado='activo'` es lo que hace que la segunda comprobación sirva
+   * de algo: si el cliente se desactivó entre los dos pasos, devuelve `null` y no
+   * se crea la sesión. Sin ese filtro, un `cat_cliente` desactivado haría que el
+   * segundo factor emitiera un token con un `tenant` que ya no existe.
+   *
+   * **No** es una autorización y no hay que auditarla: el `idcliente` no viene del
+   * pedido sino de una fila que el backend escribió.
+   */
+  async nombreDeCliente(idcliente: string): Promise<ResumenCliente | null> {
+    const cliente = await this.prisma.cat_cliente.findUnique({
+      where: { codigo: idcliente },
+      select: { codigo: true, nombre: true, estado: true },
+    });
+
+    if (!cliente || cliente.estado !== 'activo') {
+      return null;
+    }
+
+    return { idcliente: cliente.codigo, nombre: cliente.nombre };
   }
 
   /**

@@ -12,6 +12,7 @@ import {
   ErrorPortal,
   iniciarSesion,
   leerSesion,
+  pideMfa,
   type CodigoPortal,
   type ResumenCliente,
 } from '@/lib/api';
@@ -44,6 +45,17 @@ const TEXTOS: Record<CodigoPortal, string> = {
   cliente_ambiguo: 'Elegi con que cliente queres ingresar.',
   cliente_no_pertenece: 'No sos miembro de ese cliente. Volve a elegir.',
   sesion_requerida: '',
+  // Los dos codigos del segundo factor **no** se muestran en esta pantalla: la
+  // respuesta del login con MFA no es un error (es 200 con `requiere_mfa`) y la
+  // pantalla que los maneja es `/mfa`. Dejarlos en el `Record` como cadena vacia
+  // es lo que hace que el tipo siga siendo el mapa cerrado de `CodigoPortal` y
+  // que un codigo nuevo no compilar hasta que alguien decida su texto.
+  mfa_incorrecto: '',
+  mfa_desafio_invalido: '',
+  // Codigo de `/me/mfa/confirmar`. No aparece en esta pantalla: esta en la lista
+  // porque el tipo es `Record<CodigoPortal, string>` y todos los codigos tienen
+  // su texto en algun lado.
+  mfa_no_pendiente: '',
   sin_conexion:
     'No pudimos comunicarnos con el servicio de identidad. Revisa tu conexion o ' +
     'avisa a quien administra el sistema: reintentar no sirve si el servicio esta caido.',
@@ -183,6 +195,19 @@ function Login() {
 
     try {
       const resultado = await iniciarSesion(usuario, clave, returnTo, clienteElegido);
+
+      // Segundo factor (fase 09). La clave es correcta y hay que pedir el codigo:
+      // se va a `/mfa` con el `factor_id` en la URL y **sin** la clave ni el
+      // `returnTo` (el backend los tiene resueltos en la fila del desafio, y
+      // mandarlos de vuelta seria mandar la clave otra vez por la red).
+      //
+      // Sin este `if`, un usuario con MFA activo caeria en el lanzador sin sesion
+      // y el siguiente pedido daria 401: entra, ve el logo, y lo echan.
+      if (pideMfa(resultado)) {
+        window.location.assign(`/mfa?factor=${encodeURIComponent(resultado.factor_id)}`);
+        return;
+      }
+
       // Destino ya validado por el backend: no es un open redirect. Pero es
       // relativo **al issuer**, asi que se navega con `irAlDestino`, que lo
       // resuelve contra `API_URL` y no contra el origen de este portal.

@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useMemo, useState } from 'react';
 import { MarcoAdmin } from '../_marco';
+import { MfaTabla, useMfaPanel } from './_mfa';
 import { Cargando } from '@/design/components/Marco';
 import { Boton } from '@/design/components/Boton';
 import { Campo } from '@/design/components/Campo';
@@ -157,6 +158,18 @@ function TablaUsuarios({
   const [ocupado, setOcupado] = useState(false);
   const [claveNueva, setClaveNueva] = useState<{ usuario: string; clave: string } | null>(null);
 
+  /**
+   * MFA: su propio hook con sus propios diálogos (`_mfa.tsx`).
+   *
+   * Vive aparte y no como tres estados más acá porque el bloque de entregables
+   * (secret + 10 códigos, **una sola vez**) es un caso distinto del de la clave
+   * temporal: se muestra **después** de la confirmación y tiene que sobrevivir a
+   * la recarga de la tabla. Con un estado más por acción, el `setConfirmando(null)`
+   * del `ejecutar` común se llevaría por delante el bloque que el admin todavía
+   * tiene que leer.
+   */
+  const mfa = useMfaPanel({ avisar, alTerminar: alCambiar });
+
   async function ejecutar(): Promise<void> {
     if (!confirmando || ocupado) {
       return;
@@ -194,7 +207,7 @@ function TablaUsuarios({
           </caption>
           <thead>
             <tr className="border-b border-plata/60">
-              {['Usuario', 'Nombre', 'Apps habilitadas', 'Última sesión', 'Estado', 'Acciones'].map(
+              {['Usuario', 'Nombre', 'Apps habilitadas', 'Última sesión', 'Estado', 'MFA', 'Acciones'].map(
                 (columna) => (
                   <th
                     key={columna}
@@ -257,6 +270,9 @@ function TablaUsuarios({
                     <Estado valor={usuario.estado} />
                   </td>
                   <td className="px-3 py-2">
+                    <MfaTabla usuario={usuario} />
+                  </td>
+                  <td className="px-3 py-2">
                     <ul className="flex flex-wrap gap-2">
                       <li>
                         <Boton
@@ -276,6 +292,47 @@ function TablaUsuarios({
                           {usuario.estado === 'inactivo' ? 'Reactivar' : 'Desactivar'}
                         </Boton>
                       </li>
+                      {/*
+                        Los tres botones de MFA, y su regla de aparición: los que
+                        aplican al estado actual. "Activar MFA" **no** aparece con
+                        un segundo factor ya enrolado (`pending` u `on`), porque
+                        activar genera un secret nuevo y deja el anterior dando
+                        vueltas: para cambiar el secret, el camino es desactivar
+                        (que pide confirmación y queda auditado) y volver a
+                        activar.
+                      */}
+                      {!usuario.mfa || usuario.mfa.estado === 'off' ? (
+                        <li>
+                          <Boton
+                            variante="secondary"
+                            className="min-h-tactil px-2 py-1"
+                            onClick={() => mfa.pedir(usuario, 'activar')}
+                          >
+                            Activar MFA
+                          </Boton>
+                        </li>
+                      ) : (
+                        <>
+                          <li>
+                            <Boton
+                              variante="secondary"
+                              className="min-h-tactil px-2 py-1"
+                              onClick={() => mfa.pedir(usuario, 'desactivar')}
+                            >
+                              Desactivar MFA
+                            </Boton>
+                          </li>
+                          <li>
+                            <Boton
+                              variante="secondary"
+                              className="min-h-tactil px-2 py-1"
+                              onClick={() => mfa.pedir(usuario, 'codigos')}
+                            >
+                              C&#243;digos MFA
+                            </Boton>
+                          </li>
+                        </>
+                      )}
                     </ul>
                   </td>
                 </tr>
@@ -337,6 +394,8 @@ function TablaUsuarios({
           alCerrar={() => setClaveNueva(null)}
         />
       ) : null}
+
+      {mfa.dialogos}
     </>
   );
 }

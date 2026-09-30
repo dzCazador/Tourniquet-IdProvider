@@ -47,6 +47,10 @@ export function enHoras(horas: number, desde = new Date()): Date {
   return new Date(desde.getTime() + horas * 60 * MINUTO_MS);
 }
 
+export function enMinutos(minutos: number, desde = new Date()): Date {
+  return new Date(desde.getTime() + minutos * MINUTO_MS);
+}
+
 export function enSegundos(segundos: number, desde = new Date()): Date {
   return new Date(desde.getTime() + segundos * 1000);
 }

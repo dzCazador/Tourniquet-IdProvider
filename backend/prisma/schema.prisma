@@ -33,7 +33,8 @@ model cat_cliente {
   aplicaciones         cat_cliente_aplicacion[]        @relation("FK_cat_cliente_aplicacion_cliente")
   membresias           idn_usuario_cliente[]           @relation("FK_idn_usuario_cliente_cliente")
   membresiasAplicacion idn_usuario_cliente_aplicacion[] @relation("FK_idn_uca_cliente")
-  sesiones           tok_sesion[]                  @relation("FK_tok_sesion_cliente")
+  sesiones           tok_sesion[]                     @relation("FK_tok_sesion_cliente")
+  desafiosMfa        tok_mfa_challenge[]              @relation("FK_tok_mfa_challenge_cliente")
 }
 
 model cat_aplicacion {
@@ -93,6 +94,16 @@ model idn_usuario {
   clave_hash          String   @map("clave_hash")
   mfa_secret_cifrada  Bytes?   @map("mfa_secret_cifrada")
   mfa_estado          String   @map("mfa_estado") @default("off")
+  /// Ultimo PERIODO de TOTP aceptado (floor(epoch/30)), no un timestamp. La
+  /// ventana +-1 del reloj hace que un codigo del periodo N tambien valida en N+1
+  /// (`specs/01` §8.3), asi que sin esta columna un codigo espiado en el limite
+  /// sirve dos veces. NULL = todavia no se acepto ninguno.
+  ///
+  /// `BigInt` y no `Int` por fidelidad al `bigint` del DDL. El mapeo es 1:1:
+  /// Prisma devuelve `bigint` de SQL Server como `big`, y la app compara con
+  /// `BigInt(Math.floor(...))`. Con `Int` habria que castear en cada uso y el
+  /// `schema.prisma` dejaria de describir la tabla.
+  mfa_ultimo_periodo  BigInt?  @map("mfa_ultimo_periodo")
   estado              String   @map("estado") @default("activo")
   intentos_fallidos   Int      @map("intentos_fallidos") @default(0)
   bloqueado_hasta     DateTime? @map("bloqueado_hasta")
@@ -103,6 +114,8 @@ model idn_usuario {
   membresiasAplicacion idn_usuario_cliente_aplicacion[] @relation("FK_idn_uca_usuario")
   sesiones             tok_sesion[]                      @relation("FK_tok_sesion_usuario")
   eventos              aud_login[]                       @relation("FK_aud_audit_usuario")
+  codigosMfa           idn_usuario_mfa_codigo[]         @relation("FK_idn_mfa_codigo_usuario")
+  desafiosMfa          tok_mfa_challenge[]              @relation("FK_tok_mfa_challenge_usuario")
 }
 
 model idn_usuario_cliente {
@@ -126,6 +139,26 @@ model idn_usuario_cliente_aplicacion {
   usuario       idn_usuario     @relation("FK_idn_uca_usuario", fields: [idusuario], references: [idusuario], onDelete: Cascade, onUpdate: NoAction)
   cliente       cat_cliente     @relation("FK_idn_uca_cliente", fields: [idcliente], references: [codigo], onDelete: NoAction, onUpdate: NoAction)
   aplicacion    cat_aplicacion  @relation("FK_idn_uca_aplicacion", fields: [idaplicacion], references: [codigo], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model idn_usuario_mfa_codigo {
+  id          Int       @id @map("id") @default(autoincrement())
+  idusuario   String    @map("idusuario")
+  /// sha256 hex del codigo normalizado, con sal = el `idusuario` del usuario. La
+  /// sal es publica a proposito (es el mismo UUID del claim `sub`): lo que evita
+  /// es la tabla precalculada, no esconder el identificador. Sin sal, ~48 bits de
+  /// un alfabeto de 28 son un ataque por diccionario con una GPU.
+  ///
+  /// UNIQUE en el SQL (UQ_idn_usuario_mfa_codigo_hash) y declarado aca: es como
+  /// se encuentra el codigo que tipea el usuario, y sin la unicidad "usar el
+  /// codigo" seria ambiguo.
+  codigo_hash String    @unique @map("codigo_hash")
+  creado_en   DateTime  @map("creado_en") @default(now())
+  /// Un solo uso. NULL = vigente.
+  usado_en    DateTime? @map("usado_en")
+  @@map("idn_usuario_mfa_codigo")
+  // CASCADE como las otras dos hijas de `idn_usuario` (`specs/02` §3).
+  usuario idn_usuario @relation("FK_idn_mfa_codigo_usuario", fields: [idusuario], references: [idusuario], onDelete: Cascade, onUpdate: NoAction)
 }
 
 model tok_sesion {
@@ -184,6 +217,33 @@ model tok_refresh_token {
   revocado_en      DateTime? @map("revocado_en")
   motivo           String?  @map("motivo")
   @@map("tok_refresh_token")
+}
+
+model tok_mfa_challenge {
+  /// Es el `factor_id` de la respuesta del login en dos pasos. Lo genera la app
+  /// con `crypto.randomUUID()`; el DDL no depende de `newid()` (`specs/02` §2).
+  id         String   @id @map("id") @default(uuid())
+  idusuario  String   @map("idusuario")
+  idcliente  String   @map("idcliente")
+  /// Destino YA validado por `validarReturnTo`, relativo al issuer. Se guarda
+  /// para que `POST /auth/mfa/verify` no tenga que creerle el destino al cliente.
+  return_to  String   @map("return_to")
+  ip         String   @map("ip")
+  user_agent String   @map("user_agent")
+  creado_en  DateTime @map("creado_en") @default(now())
+  /// 5 minutos. Alcanza para sacar el telefono y no alcanza para reutilizar un
+  /// `factor_id` filtrado por un log.
+  expira_en  DateTime @map("expira_en")
+  /// Intentos de codigo incorrecto. 5 matan el desafio (politica de la app,
+  /// `MAX_INTENTOS_MFA`), NO el bloqueo de contrasena de `idn_usuario`: son dos
+  /// cosas distintas.
+  intentos   Int      @map("intentos") @default(0)
+  /// Un solo uso.
+  usado_en   DateTime? @map("usado_en")
+  @@map("tok_mfa_challenge")
+  // NO ACTION hacia usuario y cliente, como las demas `tok_` (`specs/02` §3).
+  usuario idn_usuario @relation("FK_tok_mfa_challenge_usuario", fields: [idusuario], references: [idusuario], onDelete: NoAction, onUpdate: NoAction)
+  cliente cat_cliente @relation("FK_tok_mfa_challenge_cliente", fields: [idcliente], references: [codigo], onDelete: NoAction, onUpdate: NoAction)
 }
 
 model tok_clave_firma {

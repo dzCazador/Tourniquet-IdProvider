@@ -3,6 +3,7 @@
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { CabeceraPortal } from '../_portal/CabeceraPortal';
+import { BloqueMfa } from './_mfa';
 import { Boton } from '@/design/components/Boton';
 import { Cargando, Marco } from '@/design/components/Marco';
 import { Sello } from '@/design/ornaments/Sello';
@@ -234,6 +235,16 @@ export default function MiCuenta() {
             quien administra el acceso.
           </p>
         ) : null}
+
+        {/*
+          El bloque de segundo factor va **después** de las sesiones y antes de
+          las salidas, por el orden en que un usuario lo recorre: qué tiene
+          abierto, cómo se protege su cuenta, cómo se sale. Va antes de las
+          salidas y no después porque "salir de todo" es la última cosa que se
+          toca en esa pantalla, y un bloque que obliga a releer después de
+          apagar el MFA sería una trampa.
+        */}
+        <BloqueMfa alCambiar={recargar} />
 
         <Costura className="my-8" />
 

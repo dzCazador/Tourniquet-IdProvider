@@ -4,6 +4,7 @@ import { OidcModule } from '../oidc/oidc.module';
 import { AdminAuditoriaService } from './admin.auditoria.service';
 import { AdminController } from './admin.controller';
 import { AdminGuard } from './admin.guard';
+import { AdminMfaService } from './admin.mfa.service';
 import { AdminSesionesService } from './admin.sesiones.service';
 import { AdminUsuariosService } from './admin.usuarios.service';
 
@@ -32,6 +33,12 @@ import { AdminUsuariosService } from './admin.usuarios.service';
 @Module({
   imports: [OidcModule, AuthModule],
   controllers: [AdminController],
-  providers: [AdminGuard, AdminUsuariosService, AdminSesionesService, AdminAuditoriaService],
+  providers: [
+    AdminGuard,
+    AdminUsuariosService,
+    AdminSesionesService,
+    AdminAuditoriaService,
+    AdminMfaService,
+  ],
 })
 export class RegistroApiModule {}

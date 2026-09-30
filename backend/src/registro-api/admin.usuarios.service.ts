@@ -1,12 +1,14 @@
 import { randomInt } from 'node:crypto';
 import { Injectable, Logger } from '@nestjs/common';
 import { AuditoriaService, detalleDe } from '../auth/auditoria.service';
+import { AVISO_CODIGOS_POCOS } from '../auth/mfa.service';
 import { hashear } from '../auth/password.service';
 import { normalizarUsuario } from '../auth/politica-clave';
 import { conflicto, noEncontrado, peticionInvalida } from '../registro/errores';
 import { SesionService } from '../oidc/sesion.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { AltaUsuarioDto, EditarUsuarioDto, ListadoUsuariosDto } from './dto/admin.dto';
+import type { EstadoMfaUsuario } from '../auth/mfa.service';
 import type { SesionAdmin } from './admin.types';
 
 /** Tope de la paginacion del panel. 100 es el limite de la fase 08 §4. */
@@ -14,7 +16,7 @@ export const TOPE_POR_PAGINA = 100;
 
 /**
  * Alfabeto de la clave temporal: sin vocales analogues ni caracteres que se
- * confunden leyendo un cartel de纸上 (`0/O`, `1/l/I`).
+ * confunden leyendo un cartel de papel (`0/O`, `1/l/I`).
  *
  * Se leen **en voz alta** y se anotan en una planilla, asi que el problema real no
  * es la entropia: es que alguien la escriba mal y el usuario no entre. Por eso
@@ -50,6 +52,17 @@ export interface UsuarioAdmin {
   estado: string;
   apps: string[];
   ultima_sesion: string | null;
+  /**
+   * Estado del segundo factor (Fase 09), o `null` si la fila viniera sin
+   * `mfa_estado` (no deberia pasar: es NOT NULL en el DDL).
+   *
+   * `codigos_restantes` y `aviso_pocos` salen de una **sola** consulta agrupada
+   * para toda la pagina, no de una por fila. La columna "MFA" del panel es la que
+   * un admin mira para decidir si abrir el alta de un usuario, y mostrar "on"
+   * sin decir si le quedan códigos esconde justo el caso que hay que actuar
+   * (dos códigos y una app de autenticación que se rompió).
+   */
+  mfa: EstadoMfaUsuario | null;
 }
 
 export interface ResultadoAlta {
@@ -424,6 +437,8 @@ export class AdminUsuariosService {
           apellido: true,
           email: true,
           estado: true,
+          mfa_estado: true,
+          mfa_ultimo_periodo: true,
           membresiasAplicacion: {
             where: { idcliente: admin.idcliente },
             select: { idaplicacion: true },
@@ -438,10 +453,11 @@ export class AdminUsuariosService {
 
     // La ultima sesion viva por usuario: una consulta agrupada, no N+1. Es un dato
     // que el admin mira para decidir "este usuario entra o no", no un historial.
-    const ultimas = await this.ultimaSesionPorUsuario(
-      filas.map((f) => f.idusuario),
-      admin.idcliente,
-    );
+    const ids = filas.map((f) => f.idusuario);
+    const [ultimas, codigos] = await Promise.all([
+      this.ultimaSesionPorUsuario(ids, admin.idcliente),
+      this.codigosMfaPorUsuario(ids),
+    ]);
 
     return {
       total,
@@ -456,6 +472,7 @@ export class AdminUsuariosService {
         estado: f.estado,
         apps: f.membresiasAplicacion.map((m) => m.idaplicacion),
         ultima_sesion: ultimas.get(f.idusuario) ?? null,
+        mfa: this.mfaDe(f.mfa_estado, f.mfa_ultimo_periodo, codigos.get(f.idusuario) ?? 0),
       })),
     };
   }
@@ -495,6 +512,8 @@ export class AdminUsuariosService {
         apellido: true,
         email: true,
         estado: true,
+        mfa_estado: true,
+        mfa_ultimo_periodo: true,
         membresiasAplicacion: {
           where: { idcliente },
           select: { idaplicacion: true },
@@ -506,7 +525,10 @@ export class AdminUsuariosService {
       noEncontrado();
     }
 
-    const ultimas = await this.ultimaSesionPorUsuario([idusuario], idcliente);
+    const [ultimas, codigos] = await Promise.all([
+      this.ultimaSesionPorUsuario([idusuario], idcliente),
+      this.codigosMfaPorUsuario([idusuario]),
+    ]);
 
     return {
       idusuario: fila.idusuario,
@@ -517,6 +539,7 @@ export class AdminUsuariosService {
       estado: fila.estado,
       apps: fila.membresiasAplicacion.map((m) => m.idaplicacion),
       ultima_sesion: ultimas.get(idusuario) ?? null,
+      mfa: this.mfaDe(fila.mfa_estado, fila.mfa_ultimo_periodo, codigos.get(idusuario) ?? 0),
     };
   }
 
@@ -645,6 +668,58 @@ export class AdminUsuariosService {
       }
     }
     return salida;
+  }
+
+  /**
+   * Codigos de recuperacion sin usar, por usuario, en UNA consulta.
+   *
+   * `groupBy` + `Map` como `ultimaSesionPorUsuario`, y por el mismo motivo: 25
+   * filas con N+1 son 25 viajes de ida y vuelta para pintar una columna, y en una
+   * red de cliente se nota. El filtro `usado_en: null` es el que hace el conteo
+   * una cuenta y no un historico.
+   */
+  private async codigosMfaPorUsuario(idusuarios: string[]): Promise<Map<string, number>> {
+    if (idusuarios.length === 0) {
+      return new Map();
+    }
+
+    const grupos = await this.prisma.idn_usuario_mfa_codigo.groupBy({
+      by: ['idusuario'],
+      where: { idusuario: { in: idusuarios }, usado_en: null },
+      _count: { _all: true },
+    });
+
+    const salida = new Map<string, number>();
+    for (const grupo of grupos) {
+      salida.set(grupo.idusuario, grupo._count._all);
+    }
+    return salida;
+  }
+
+  /**
+   * La forma del MFA que ve el panel.
+   *
+   * `mfa_secret_cifrada` **no** se pide en ningun `select` de este archivo: no es
+   * que la columna este oculta en la respuesta, es que no llega a salir del
+   * motor (criterio de aceptacion de la fase 09). `mfa_ultimo_periodo` si se pide
+   * y sale, y es un dato de diagnóstico, no un secreto: es el período TOTP del
+   * último código aceptado, y con el se responde "hace cuanto confirmo su
+   * segundo factor".
+   */
+  private mfaDe(
+    estado: string,
+    ultimoPeriodo: bigint | null,
+    codigosRestantes: number,
+  ): EstadoMfaUsuario {
+    const estadoMfa = estado as EstadoMfaUsuario['estado'];
+    const off = estadoMfa === 'off';
+
+    return {
+      estado: estadoMfa,
+      codigos_restantes: off ? 0 : codigosRestantes,
+      aviso_pocos: !off && codigosRestantes <= AVISO_CODIGOS_POCOS,
+      ultimo_periodo: ultimoPeriodo === null ? null : ultimoPeriodo.toString(),
+    };
   }
 
   /**

@@ -22,6 +22,7 @@ import { FiltroErroresRegistro } from '../registro/errores';
 import { SinCacheInterceptor } from '../registro/sin-cache.interceptor';
 import { AdminGuard } from './admin.guard';
 import { AdminAuditoriaService } from './admin.auditoria.service';
+import { AdminMfaService } from './admin.mfa.service';
 import { AdminSesionesService } from './admin.sesiones.service';
 import { AdminUsuariosService, type Peticion } from './admin.usuarios.service';
 import { adminDe } from './admin.types';
@@ -69,6 +70,7 @@ export class AdminController {
     private readonly usuarios: AdminUsuariosService,
     private readonly sesiones: AdminSesionesService,
     private readonly auditoria: AdminAuditoriaService,
+    private readonly mfa: AdminMfaService,
   ) {}
 
   /**
@@ -230,6 +232,68 @@ export class AdminController {
     @Ip() ip: string,
   ): Promise<object> {
     return this.sesiones.cerrar(sid, dto.motivo, adminDe(req), peticionDe(req, ip));
+  }
+
+  // --- MFA (Fase 09, `specs/01` §8) --------------------------------------------
+
+  /**
+   * `POST /admin/usuarios/:id/mfa`: activa el segundo factor.
+   *
+   * La respuesta trae el `otpauth://`, la clave en base32 y los 10 códigos de
+   * recuperación, **una sola vez** (`unica_vez: true` en el cuerpo). El admin los
+   * muestra en un diálogo y se los entrega al usuario por el canal que el cliente
+   * tenga; después no hay forma de volver a verlos, porque del secret sólo
+   * queda el cifrado y de los códigos sólo los hashes.
+   *
+   * El usuario queda en **`pending`**: entra con la clave sola hasta que confirme
+   * con un código desde `/mi-cuenta`. Es lo que hace que activar MFA a alguien
+   * no le corte el acceso (`specs/01` §8.1).
+   *
+   * Reactivar sobre alguien que ya tenía MFA genera un secret nuevo y vuelve a
+   * `pending`: el secret anterior deja de valer y la app que el usuario ya tenía
+   * configurada se queda vieja. Es deliberado —preferible obligar a reconfigurar
+   * antes que dejar un secret viejo en circulación— y por eso la UI avisa que se
+   * puede perder el acceso si el usuario no vuelve a escanear.
+   */
+  @Post('usuarios/:id/mfa')
+  @HttpCode(200)
+  async activarMfa(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+    @Ip() ip: string,
+  ): Promise<object> {
+    return this.mfa.activar(id, adminDe(req), peticionDe(req, ip));
+  }
+
+  /**
+   * `DELETE /admin/usuarios/:id/mfa`: desactiva el segundo factor y cierra las
+   * sesiones del usuario **en este cliente** (`specs/01` §8.4).
+   *
+   * Idempotente: si ya estaba apagado responde 200 con `ya_estaba_apagado: true`.
+   */
+  @Delete('usuarios/:id/mfa')
+  async desactivarMfa(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+    @Ip() ip: string,
+  ): Promise<object> {
+    return this.mfa.desactivar(id, adminDe(req), peticionDe(req, ip));
+  }
+
+  /**
+   * `POST /admin/usuarios/:id/mfa/codigos`: regenera los códigos de recuperación.
+   *
+   * Invalida los anteriores. No cambia el secret ni el estado: el usuario con la
+   * app configurada sigue entrando igual (`specs/01` §8.5).
+   */
+  @Post('usuarios/:id/mfa/codigos')
+  @HttpCode(200)
+  async regenerarCodigosMfa(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Req() req: Request,
+    @Ip() ip: string,
+  ): Promise<object> {
+    return this.mfa.regenerarCodigos(id, adminDe(req), peticionDe(req, ip));
   }
 
   // --- Auditoría --------------------------------------------------------------

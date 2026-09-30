@@ -72,17 +72,25 @@ El portal deja de ser técnico y se vuelve el reemplazo del `Lanzador.asp`.
 
 Se toma lo que el primer contrato real pida; todo lo demás queda documentado como no hecho.
 
-- MFA TOTP (`specs/01` §8) con códigos de recuperación.
-- Rotación de claves de firma al primer aniversario o compromiso: drill documentado (runbook en
-  `deploy/`).
-- Job externo de limpieza (`tok_autorization_code` vencido, retención `aud_login`) en SQL
-  Agent, ejecuta el usuario.
-- Decisión documentada de federación saliente (AD/Entra del cliente) sobre D1 — spec propio si
-  se aprueba.
-- Interfaz de export para el futuro TenantRegistry de RHPro (`/registry/bases/:tenant` con
+- **MFA TOTP** (`specs/01` §8) con códigos de recuperación. **Entregado** (Fase 09).
+- **Rotación de claves de firma** al primer aniversario o compromiso: drill documentado (runbook en
+  `deploy/`). **Entregado** (Fase 09): procedimiento por script, endpoint apagado por default,
+  runbook y script de verificación. El **drill completo falta ejecutarse una vez real** contra
+  una instalación de cliente: es el paso que la Fase 09 deja agendado para cuando haya un
+  `TQ_ISSUER` propio.
+- **Job externo de limpieza** (`tok_autorization_code` vencido, retención `aud_login`) en SQL
+  Agent, ejecuta el usuario. **Entregado** (Fase 09), y además para motores **sin SQL Agent**
+  (SQL Server Express): los mismos `.sql` se agendan con el Planificador de tareas de Windows.
+- **Decisión documentada de federación saliente** (AD/Entra del cliente) sobre D1 — spec propio si
+  se aprueba. **Decidida: no aprobada, queda como mejora a futuro** con las cuatro decisiones
+  previas anotadas en `specs/todo/begin/README.md` § *Federación, si algún día*.
+- **Interfaz de export** para el futuro TenantRegistry de RHPro (`/registry/bases/:tenant` con
   inventario; el desencripto de credenciales por mecanismo separado, aún **sin diseño**).
+  **Entregado** (Fase 09) el inventario, en `bases` y `aplicaciones`. El **desencripto de
+  credenciales sigue sin diseño** y no se implementa en ninguna fase.
 - **Aceptación**: cada ítem entregado con su runbook de producción; lo no entregado sigue
-  listado acá como pendiente, no como supuesto.
+  listado acá como pendiente, no como supuesto. La lista vigente está en el `README.md` de la
+  raíz, en dos tablas: lo que no se implementó, y lo que existe con una limitación conocida.
 
 ## Reglas transversales a todas las fases
 

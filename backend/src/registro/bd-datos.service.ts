@@ -43,6 +43,30 @@ export interface BaseInventario {
   credencial_registrada: boolean;
 }
 
+/**
+ * Fila de inventario de una **aplicación** de un cliente, para
+ * `GET /registry/aplicaciones/:tenant` (Fase 09, `specs/00` §4.2).
+ *
+ * `base` es el **nombre** de la base de negocio activa de esa app
+ * (`cat_base_datos.base`), o `null` si no hay ninguna inventariada. Es el mismo
+ * dato que viaja en el claim `base` del token (`specs/01` §2): lo que la app
+ * necesita saber es a qué base habla, y el **nombre** de la base no es una
+ * credencial.
+ *
+ * El tipo **no** declara `usuario`, `credencial_cifrada` ni `host`: no es que la
+ * consulta no los pida, es que no hay forma de que salgan en la respuesta porque
+ * no existen para serializar. `credencial_registrada` sigue siendo un booleano.
+ */
+export interface AplicacionInventario {
+  codigo: string;
+  nombre: string;
+  /** La URL por la que el lanzador abre la app (`cat_aplicacion.url_inicio`). */
+  url_inicio: string;
+  estado: string;
+  /** Nombre de la base de negocio activa, o `null`. Nunca el host. */
+  base: string | null;
+}
+
 export interface CredencialBase {
   /** Login de SQL Server. En claro: es inventario interno, no un secreto. */
   usuario: string;
@@ -139,6 +163,61 @@ export class BdDatosService {
       select: { rol: true },
     });
     return membresia?.rol === 'admin_identidad';
+  }
+
+  /**
+   * Apps del cliente con su base de negocio activa, para
+   * `GET /registry/aplicaciones/:tenant` (Fase 09, `specs/00` §4.2).
+   *
+   * Sale de `cat_cliente_aplicacion` —las apps que existen **para ese cliente**—
+   * y no del catálogo global: un TenantRegistry que lee el inventario de `cervi`
+   * tiene que ver las apps de `cervi`, y ofrecerle las de `jugos` sería una
+   * travesía entre tenants con forma de dato.
+   *
+   * Se incluyen las apps `inactivo` por el mismo motivo que `inventario()`: la
+   * fila es histórico y sirve para diagnosticar una instalación que se migró.
+   *
+   * La base se resuelve con **una segunda consulta** y un `Map`, no con un
+   * `include` anidado: la relación `cat_aplicacion` ↔ `cat_base_datos` no existe
+   * en el esquema de Prisma (hay FKs sueltas por `idcliente` + `idaplicacion`) y
+   * declararla obligaría a tocar el DDL. Es el mismo patrón que usa
+   * `MeController.apps`.
+   *
+   * El filtro de `base` es `estado = 'activo'` **y** `idcliente`, que es lo que
+   * hace que el nombre de la base sea el de **este** cliente.
+   */
+  async aplicaciones(idcliente: string): Promise<AplicacionInventario[]> {
+    const apps = await this.prisma.cat_aplicacion.findMany({
+      where: { clientes: { some: { idcliente } } },
+      select: { codigo: true, nombre: true, url_inicio: true, estado: true },
+      orderBy: { codigo: 'asc' },
+    });
+
+    if (apps.length === 0) {
+      return [];
+    }
+
+    const bases = await this.prisma.cat_base_datos.findMany({
+      where: {
+        idcliente,
+        estado: 'activo',
+        idaplicacion: { in: apps.map((a) => a.codigo) },
+      },
+      // El `base` y nada más: ni `usuario`, ni `host`, ni `credencial_cifrada`.
+      // La respuesta de este endpoint es inventario, y el `host` es un dato de
+      // la red del cliente que no necesita un TenantRegistry remoto.
+      select: { idaplicacion: true, base: true },
+    });
+
+    const basePorApp = new Map(bases.map((b) => [b.idaplicacion, b.base]));
+
+    return apps.map((app) => ({
+      codigo: app.codigo,
+      nombre: app.nombre,
+      url_inicio: app.url_inicio,
+      estado: app.estado,
+      base: basePorApp.get(app.codigo) ?? null,
+    }));
   }
 
   /**

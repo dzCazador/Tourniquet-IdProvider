@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { createHash, createPublicKey, generateKeyPairSync } from 'node:crypto';
 import {
   importJWK,
@@ -9,6 +9,7 @@ import {
   type JWTPayload,
 } from 'jose';
 import { PrismaService } from '../prisma/prisma.service';
+import { MINUTO_MS } from '../oidc/vidas';
 import { MasterKeyService } from './master-key.service';
 
 /** Unico algoritmo aceptado. `specs/01` §5: `none` y HS256 se rechazan siempre. */
@@ -19,6 +20,47 @@ export const MODULUS_RSA = 2048;
 
 /** La clave retirada sigue en el JWKS esta ventana (`specs/01` §5). */
 export const VENTANA_JWKS_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Cada cuanto se rota la clave de firma (`specs/01` §5): 90 dias, o por
+ * compromiso.
+ *
+ * Vive aca y no en un `.env` porque no es configurable: es una politica del
+ * producto, y una politica que se pueda aflojar con una variable es una politica
+ * que alguien afloja. El que rota por compromiso (una clave filtrada) no espera
+ * a que se cumpla el plazo, y por eso el mismo endpoint existe para las dos
+ * cosas.
+ */
+export const DIAS_ROTACION = 90;
+
+/** Una clave del estado de rotación, con lo que un operador necesita de ella. */
+export interface ClaveEstado {
+  kid: string;
+  activa: boolean;
+  creada_en: string;
+  retirada_en: string | null;
+  /** `true` si el JWKS la publica ahora mismo (activa o retirada hace < 24 h). */
+  en_jwks: boolean;
+  /**
+   * Tokens de esta clave que todavía podrían estar vivos, o `null` si no se puede
+   * saber todavía.
+   *
+   * `0` = ninguno: la clave se retiró hace mas de la vida del access token, así
+   * que todo lo que firmó expiró solo. `null` = todavía pueden quedar algunos, y
+   * la cuenta es la ventana de vida del access.
+   */
+  tokens_en_vuelo: number | null;
+}
+
+export interface EstadoClaves {
+  kid_activa: string | null;
+  creada_en: string | null;
+  dias_activa: number | null;
+  rotacion_dias: number;
+  /** Fecha en la que la clave activa cumple los 90 días. ISO 8601. */
+  vence_en: string | null;
+  claves: ClaveEstado[];
+}
 
 export type JwkFirma = JWK & { kid: string; alg: string; use: 'sig' };
 
@@ -42,6 +84,8 @@ export interface ClaimsAccess {
 
 @Injectable()
 export class FirmaService {
+  private readonly logger = new Logger(FirmaService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly masterKey: MasterKeyService,
@@ -128,9 +172,9 @@ export class FirmaService {
    * retirar la anterior, que sigue en el JWKS 24 h para que los tokens viejos
    * (15 min de vida) validen con relojes desincronizados.
    *
-   * Existe desde esta fase pero NO se expone por HTTP: la rotacion es de la
-   * Fase 09, y un endpoint de rotacion abierto seria una via para DoS sobre
-   * los tokens del tenant.
+   * **Lo que NO hace** es borrar la clave anterior: queda con `retirada_en` y el
+   * JWKS la publica 24 h más. Ese margen es lo que hace reversible la rotación
+   * (`reactivar`), y un `DELETE` de la fila lo eliminaría.
    */
   async activarNueva(): Promise<string> {
     const { publicaJwk, privadaPem } = this.generarPar();
@@ -153,7 +197,120 @@ export class FirmaService {
       }),
     ]);
 
+    this.logger.log(
+      `rotacion de clave de firma: activa ${publicaJwk.kid} (la anterior queda en el JWKS 24 h)`,
+    );
+
     return publicaJwk.kid;
+  }
+
+  /**
+   * Reactiva una clave ya retirada: es el **rollback** de la rotación
+   * (`specs/01` §5.1).
+   *
+   * Pone `activa=1` en esa clave y retira la que estaba activa. Es seguro
+   * mientras la clave siga en la tabla —y las claves **no se borran**, así que en
+   * la práctica siempre lo está— y por eso el runbook dice "reactivá el `kid`
+   * anterior" y no "generá una nueva": una clave nueva en el rollback invalida
+   * todos los tokens que la clave anterior había firmado, que es justo lo que se
+   * está intentando evitar.
+   *
+   * **La fila tiene que descifrar con la master key actual**: si se reactivó
+   * después de un cambio de master key, firmar va a fallar en el primer token y
+   * el error dice exactamente eso (`clavePrivada`).
+   *
+   * El `where` de la actualización lleva `activa: false` implícito en el
+   * `updateMany` de la clave activa, y las dos operaciones van en una
+   * transacción: no hay un instante en el que haya dos claves activas o ninguna.
+   */
+  async reactivar(kid: string): Promise<string> {
+    const objetivo = await this.prisma.tok_clave_firma.findUnique({
+      where: { kid },
+      select: { kid: true, activa: true },
+    });
+
+    if (!objetivo) {
+      throw new Error(
+        `No hay clave de firma con kid=${kid}. Las claves no se borran, asi que un kid ` +
+          'inexistente significa que se escribio a mano o que la base no es la de esta instalacion.',
+      );
+    }
+
+    const ahora = new Date();
+    const kidPrevio = await this.rotarActiva(kid, ahora);
+
+    this.logger.log(
+      `reactivacion de clave de firma: ${kid} vuelve a ser la activa (se retira ${kidPrevio ?? 'ninguna'})`,
+    );
+
+    return kid;
+  }
+
+  /**
+   * Estado de las claves, para el drill y para la pantalla de operación.
+   *
+   * `tokens_en_vuelo` es una **estimación por fecha**, y el motivo por el que la
+   * estimación es honesta: los access tokens no se persisten (invariante de
+   * `AGENTS.md`: ningún token en la base), así que no hay forma de contar cuántos
+   * quedaron firmados con una clave retirada. Lo que sí se sabe con certeza es
+   * que un token de 15 min firmado con una clave retirada hace más de 15 min ya
+   * expiró, y ese es el único número que un operador necesita para decidir si
+   * esperar o reiniciar lo que haga falta.
+   */
+  async estado(vidaAccessMin: number): Promise<EstadoClaves> {
+    const ahora = new Date();
+    const filas = await this.prisma.tok_clave_firma.findMany({
+      select: { kid: true, activa: true, creado_en: true, retirada_en: true },
+      orderBy: { creado_en: 'desc' },
+    });
+
+    const activa = filas.find((f) => f.activa) ?? null;
+
+    return {
+      kid_activa: activa?.kid ?? null,
+      creada_en: activa?.creado_en.toISOString() ?? null,
+      dias_activa: activa ? Math.floor((ahora.getTime() - activa.creado_en.getTime()) / 86_400_000) : null,
+      rotacion_dias: DIAS_ROTACION,
+      vence_en: activa ? new Date(activa.creado_en.getTime() + DIAS_ROTACION * 86_400_000).toISOString() : null,
+      claves: filas.map((f) => ({
+        kid: f.kid,
+        activa: f.activa,
+        creada_en: f.creado_en.toISOString(),
+        retirada_en: f.retirada_en ? f.retirada_en.toISOString() : null,
+        en_jwks:
+          f.activa ||
+          (f.retirada_en !== null && f.retirada_en.getTime() >= ahora.getTime() - VENTANA_JWKS_MS),
+        tokens_en_vuelo: f.retirada_en
+          ? ahora.getTime() - f.retirada_en.getTime() > vidaAccessMin * MINUTO_MS
+            ? 0
+            : null
+          : null,
+      })),
+    };
+  }
+
+  /**
+   * Deja `kid` como la unica activa y devuelve la que estaba activa antes.
+   *
+   * Privado porque las dos operaciones que lo usan (`activarNueva` y `reactivar`)
+   * ya son las que exponen el contrato; dejarlo publico sería una tercera puerta
+   * para dejar la tabla con dos claves activas.
+   */
+  private async rotarActiva(kid: string, ahora: Date): Promise<string | null> {
+    const previa = await this.leerActiva();
+
+    await this.prisma.$transaction([
+      this.prisma.tok_clave_firma.updateMany({
+        where: { activa: true },
+        data: { activa: false, retirada_en: ahora },
+      }),
+      this.prisma.tok_clave_firma.update({
+        where: { kid },
+        data: { activa: true, retirada_en: null },
+      }),
+    ]);
+
+    return previa?.kid ?? null;
   }
 
   /**

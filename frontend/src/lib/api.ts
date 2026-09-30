@@ -31,6 +31,11 @@ export type CodigoPortal =
   | 'cliente_ambiguo'
   | 'cliente_no_pertenece'
   | 'sesion_requerida'
+  // Segundo factor (fase 09). Los dos son del login en dos pasos; ver
+  // `verificarMfa` mas abajo para el contrato completo.
+  | 'mfa_incorrecto'
+  | 'mfa_desafio_invalido'
+  | 'mfa_no_pendiente'
   // SOLO del cliente: el `fetch` ni llego al servidor (backend caido, CORS mal
   // puesto, sin red). Status 0. Es un codigo del portal, no del backend, por
   // eso no esta en `CodigoPortal` de `portal.service.ts`.
@@ -52,6 +57,32 @@ export interface ErrorApi {
   reintento_seg?: number;
   /** Solo en `cliente_ambiguo`: los clientes del usuario, para elegir. */
   clientes?: ResumenCliente[];
+  /**
+   * Intentos de codigo que quedan. **Solo en `mfa_incorrecto`** (`specs/01` §8.2).
+   * Sin esto el usuario no tiene forma de saber si reintenta o vuelve a
+   * ingresar, y la unica manera de averiguarlo es fallar cinco veces.
+   */
+  intentos_restantes?: number;
+}
+
+/**
+ * Respuesta del login cuando el segundo factor esta activo.
+ *
+ * Es una **variante** de la respuesta de login, no un error: el backend responde
+ * 200 con esto y **no** crea sesion. El portal tiene que notar `requiere_mfa` y
+ * pasar a `/mfa`; si lo trata como un login exitoso, el usuario aterriza en el
+ * lanzador sin sesion y el siguiente pedido da 401, que es un callejon sin salida
+ * para alguien que si empezo a entrar.
+ */
+export interface DesafioMfa {
+  requiere_mfa: true;
+  /** UUID de `tok_mfa_challenge`, de un solo uso y 5 minutos de vida. */
+  factor_id: string;
+  /** ISO 8601. */
+  expira_en: string;
+  intentos_restantes: number;
+  codigos_restantes: number;
+  aviso_pocos: boolean;
 }
 
 export class ErrorPortal extends Error {
@@ -136,6 +167,7 @@ async function aErrorPortal(respuesta: Response): Promise<ErrorPortal> {
     mensaje: texto(cuerpo.mensaje) ?? texto(cuerpo.message),
     bloqueado_hasta: texto(cuerpo.bloqueado_hasta),
     reintento_seg: numero(cuerpo.reintento_seg),
+    intentos_restantes: numero((cuerpo as { intentos_restantes?: unknown }).intentos_restantes),
     clientes: leerClientesDelError((cuerpo as { clientes?: unknown }).clientes),
   });
 }
@@ -151,6 +183,9 @@ const CODIGOS: ReadonlySet<string> = new Set<CodigoPortal>([
   'cliente_ambiguo',
   'cliente_no_pertenece',
   'sesion_requerida',
+  'mfa_incorrecto',
+  'mfa_desafio_invalido',
+  'mfa_no_pendiente',
   'sin_conexion',
   'error',
 ]);
@@ -209,7 +244,7 @@ export async function iniciarSesion(
   clave: string,
   returnTo: string | null,
   cliente?: string | null,
-): Promise<ResultadoLogin> {
+): Promise<ResultadoLogin | DesafioMfa> {
   const respuesta = await pedir('/auth/login', {
     method: 'POST',
     // `no-store`: una respuesta con sesion en el cache del navegador es una
@@ -222,6 +257,37 @@ export async function iniciarSesion(
       ...(returnTo ? { returnTo } : {}),
       ...(cliente ? { cliente } : {}),
     }),
+  });
+
+  if (!respuesta.ok) {
+    throw await aErrorPortal(respuesta);
+  }
+
+  return (await respuesta.json()) as ResultadoLogin | DesafioMfa;
+}
+
+/** `true` si la respuesta del login pide el segundo factor. */
+export function pideMfa(resultado: ResultadoLogin | DesafioMfa): resultado is DesafioMfa {
+  return (resultado as DesafioMfa).requiere_mfa === true;
+}
+
+/**
+ * `POST /auth/mfa/verify`: el **segundo paso** del login con MFA (`specs/01` §8.2).
+ *
+ * El `returnTo` **no** se manda: el backend lo resuelve desde la fila del
+ * desafio y lo devuelve en la respuesta. Es lo que hace que un F5 de la pantalla
+ * de verificacion no rompa el ingreso, y que el portal no pueda decidir a donde
+ * vuelve el usuario.
+ */
+export async function verificarMfa(
+  factorId: string,
+  codigo: string,
+): Promise<ResultadoLogin> {
+  const respuesta = await pedir('/auth/mfa/verify', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ factor_id: factorId, codigo }),
   });
 
   if (!respuesta.ok) {
@@ -498,6 +564,56 @@ async function leerErrorOidc(respuesta: Response): Promise<{ error: CodigoOidc }
   };
 }
 
+// --- El segundo factor (fase 09) ----------------------------------------------
+
+export interface EstadoMfa {
+  estado: 'off' | 'pending' | 'on';
+  codigos_restantes: number;
+  aviso_pocos: boolean;
+  ultimo_periodo: string | null;
+}
+
+/** `GET /me/mfa`: el estado del segundo factor propio. */
+export async function leerMfa(): Promise<EstadoMfa> {
+  const respuesta = await pedir('/me/mfa', { cache: 'no-store' });
+  if (!respuesta.ok) {
+    throw await aErrorPortal(respuesta);
+  }
+  return (await respuesta.json()) as EstadoMfa;
+}
+
+/**
+ * `POST /me/mfa/confirmar`: `pending` -> `on` con un codigo de la app.
+ *
+ * A diferencia de `verificarMfa`, el cuerpo es el codigo solo: el backend ya
+ * sabe quien es (esta autenticado) y no hay desafio abierto.
+ */
+export async function confirmarMfa(codigo: string): Promise<{ estado: 'on' } & Pick<EstadoMfa, 'codigos_restantes' | 'aviso_pocos'>> {
+  const respuesta = await pedir('/me/mfa/confirmar', {
+    method: 'POST',
+    cache: 'no-store',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ codigo }),
+  });
+  if (!respuesta.ok) {
+    throw await aErrorPortal(respuesta);
+  }
+  return (await respuesta.json()) as { estado: 'on' } & Pick<EstadoMfa, 'codigos_restantes' | 'aviso_pocos'>;
+}
+
+/** `DELETE /me/mfa`: apaga el MFA propio y cierra las sesiones de este cliente. */
+export async function desactivarMfaPropio(): Promise<{
+  estado: 'off';
+  sesiones_cerradas: number;
+  ya_estaba_apagado: boolean;
+}> {
+  const respuesta = await pedir('/me/mfa', { method: 'DELETE', cache: 'no-store' });
+  if (!respuesta.ok) {
+    throw await aErrorPortal(respuesta);
+  }
+  return (await respuesta.json()) as { estado: 'off'; sesiones_cerradas: number; ya_estaba_apagado: boolean };
+}
+
 // --- El panel de administracion (fase 08) --------------------------------------
 
 /**
@@ -603,6 +719,17 @@ export interface UsuarioAdmin {
   estado: string;
   apps: string[];
   ultima_sesion: string | null;
+  /**
+   * Estado del segundo factor (fase 09). Viene **en la fila del listado** y no en
+   * una llamada aparte: la columna es parte de la decision que el admin esta
+   * mirando ("¿este usuario tiene MFA?"), y un boton que aparece recien despues
+   * de un click extra es un boton que nadie aprieta.
+   *
+   * `null` cuando el usuario no es miembro del cliente que se esta viendo: el
+   * backend lo deja en `null` en vez de inventar un `'off'` que seria un estado
+   * falso.
+   */
+  mfa: EstadoMfa | null;
 }
 
 export interface ListadoUsuarios {
@@ -699,6 +826,42 @@ export const habilitarApp = (id: string, app: string) =>
 
 export const deshabilitarApp = (id: string, app: string) =>
   pedirAdminJson<{ apps: string[] }>(`/admin/usuarios/${id}/apps/${app}`, { method: 'DELETE' });
+
+// --- MFA de un usuario del panel (fase 09) -------------------------------------
+
+/**
+ * `POST /admin/usuarios/:id/mfa`: activa el segundo factor.
+ *
+ * La respuesta trae el `otpauth://`, la clave en base32 y los 10 codigos de
+ * recuperacion **una sola vez** (`unica_vez: true`). El panel los muestra en un
+ * dialogo y no los vuelve a pedir: despues no hay endpoint que los devuelva.
+ */
+export interface EnrolamientoMfa {
+  usuario: string;
+  usuario_nombre: string;
+  otpauth: string;
+  clave: string;
+  codigos: string[];
+  estado: 'pending' | 'on' | 'off';
+  unica_vez: true;
+}
+
+export const activarMfa = (id: string) =>
+  pedirAdminJson<EnrolamientoMfa>(`/admin/usuarios/${id}/mfa`, { method: 'POST' });
+
+/** `DELETE /admin/usuarios/:id/mfa`: desactiva y cierra las sesiones del cliente. */
+export const desactivarMfa = (id: string) =>
+  pedirAdminJson<{ estado: 'off'; sesiones_cerradas: number; ya_estaba_apagado: boolean }>(
+    `/admin/usuarios/${id}/mfa`,
+    { method: 'DELETE' },
+  );
+
+/** `POST /admin/usuarios/:id/mfa/codigos`: regenera los codigos de recuperacion. */
+export const regenerarCodigosMfa = (id: string) =>
+  pedirAdminJson<{ usuario: string; codigos: string[]; unica_vez: true; estado: string }>(
+    `/admin/usuarios/${id}/mfa/codigos`,
+    { method: 'POST' },
+  );
 
 export const listarSesiones = (pagina?: number) =>
   pedirAdminJson<{ total: number; pagina: number; por_pagina: number; sesiones: SesionAdminRow[] }>(

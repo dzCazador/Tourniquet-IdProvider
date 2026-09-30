@@ -29,7 +29,7 @@ marcado `[browser]` en los criterios de la fase.
 | [06](fase-06-rhpro-dual-guard.md) | RHPro como relying party (guard dual + `idp_sub`) | RHPro | **Sí** | ✅ Completada y verificada (backend + front, con `code` real y en navegador) |
 | [07](fase-07-portal-lanzador.md) | Portal lanzador: membresías y lista de apps | Tourniquet | **Sí** (`01-aplicacion-url-inicio.sql`) | ✅ Código cerrado y verificado por HTTP (46 + 186 comprobaciones); queda el pase de navegador |
 | [08](fase-08-admin-identidad.md) | Panel `admin_identidad` por cliente | Tourniquet | **Sí** (`02-sesion-motivo-cierre-admin.sql`) | ✅ Código cerrado y verificado por HTTP (41 comprobaciones); queda el pase de navegador |
-| [09](fase-09-endurecimiento.md) | Endurecimiento: MFA, rotación, jobs, export de registro | Tourniquet | **Sí** (jobs) | ⬜ Pendiente |
+| [09](fase-09-endurecimiento.md) | Endurecimiento: MFA, rotación, jobs, export de registro | Tourniquet | **Sí** (`03-`, jobs `95-` a `98-`) | ✅ Código cerrado y verificado (RFC 6238 + 135 comprobaciones por HTTP); falta el pase de navegador y el **drill de rotación real** contra un `TQ_ISSUER` de cliente |
 | [10](fase-10-despliegue-cliente.md) | Despliegue en un cliente: runbooks e instalación | — | **Sí** | ⬜ Pendiente |
 | [11](fase-11-cierre-fase-01.md) | Cierre de la Fase 01 de `specs/04` | — | No | ⬜ Pendiente |
 
@@ -63,9 +63,12 @@ límite de esa línea están en "Decisiones que tomó esta fase", en el archivo 
 
 ```
 00 ──▶ 01 ──▶ 02 ──▶ 03 ──▶ 04 ──▶ 05 ──▶ 06 ──▶ 07 ──▶ 08 ──▶ 09 ──▶ 10
-                                │                     ▲
-                                └──── 11 (cierre) ────┘
+                                │                                    ▲
+                                └──── 11 (cierre) ───────────────────┘
 ```
+
+`11` (el acta de cierre de la Fase 01 de `specs/04`) se puede hacer en cualquier momento
+posterior a la `05`: no depende de la `09`.
 
 `11` no es código: es el acta de cierre de la Fase 01 de `specs/04`. Se puede hacer en cualquier
 momento posterior a la 05.
@@ -100,6 +103,23 @@ Dos cosas del build que hay que saber antes de tocarlo:
 4. Ejecutar la fase. **Al terminar, marcar el `Estado` acá y en el encabezado del archivo de fase.**
 5. Si cualquier paso de la fase revela un cambio de diseño, se actualiza **primero** el spec
    normativo, después el código. Al revés no.
+
+### Lo que la Fase 09 corrigió del camino anterior
+
+La `99-verificar-esquema.sql` —el comprobatorio de que los dos caminos del esquema
+coinciden— **nunca había corrido bien**, por dos defectos que sólo aparecen cuando
+se lo corre de verdad:
+
+1. Filtraba **sólo `cat_*`**, así que un incremental sobre `idn_`, `tok_` o `aud_` pasaba la
+   comparación sin aparecer en la huella. La `09` es la primera fase que agrega tablas fuera de
+   `cat_`, y también la que hizo visible el agujero.
+2. Usaba `sys.foreign_keys.referenced_column_id`, que **no resuelve en SQL Server 2022**
+   (probado en la 16.0.1000.6 Express del servidor de desarrollo): la consulta moría con
+   Msg 207. Ahora usa `sys.foreign_key_columns`.
+
+Además, los catálogos de SQL Server 2022 traen `nvarchar` con intercalación
+`Latin1_General_CI_AS_KS_WS`, y concatenarlo con literales de la base da Msg 451. Las
+consultas de verificación llevan `COLLATE DATABASE_DEFAULT` donde mezclan los dos.
 
 ### Reglas transversales (mismas que `specs/04` §Reglas)
 

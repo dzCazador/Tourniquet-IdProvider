@@ -44,7 +44,10 @@ const { COOKIE_SESION_PORTAL } = cargar('oidc/vidas.js');
 const { hashear } = cargar('auth/password.service.js');
 
 const args = argumentos();
-const { entorno } = prepararEntorno();
+const { entorno, configService } = prepararEntorno();
+
+/** El mismo `configService` que construyo `prepararEntorno`, para los servicios. */
+const configServiceDelScript = () => configService;
 const BASE = (args.url ?? entorno.TQ_ISSUER).replace(/\/+$/, '');
 const CLIENTE = args.cliente ?? 'marcelino';
 const USUARIO = args.usuario ?? 'admin';
@@ -178,6 +181,19 @@ async function ejecutar() {
 
   // Usuario de prueba para "un sid ajeno". No se le hace login (asi que no deja
   // filas en `aud_login` y se puede borrar al final).
+  //
+  // Se borra primero el que haya quedado de una corrida interrumpida: un
+  // `Ctrl+C` a mitad del recorrido deja la fila puesta, y la corrida siguiente
+  // muere en este `create` con "Unique constraint failed" sin decir que lo que
+  // choca es un usuario de prueba del propio script.
+  const ajenoViejo = await prisma.idn_usuario.findUnique({
+    where: { usuario: USUARIO_AJENO },
+    select: { idusuario: true },
+  });
+  if (ajenoViejo) {
+    await limpiarUsuarioDePrueba(ajenoViejo.idusuario);
+    nota(`limpiado el "${USUARIO_AJENO}" de una corrida anterior`);
+  }
   const ajeno = await prisma.idn_usuario.create({
     data: {
       usuario: USUARIO_AJENO,
@@ -193,6 +209,12 @@ async function ejecutar() {
   const cerrar = [];
   try {
     await correr(usuario, ajeno, cerrar);
+    // La Fase 09 va aparte y al final a proposito: necesita la clave del admin
+    // (con eco oculto) para las acciones de panel, y el recorrido de las fases
+    // 07-08 no la necesita porque usa el token de una sesion de app. Pedirla en
+    // medio de un recorrido largo hace que un script que fallaria en 30 segundos
+    // tarde cinco minutos en preguntar algo.
+    await mfaPorHttp();
   } finally {
     // Cierre de todo lo que se abrio, en orden inverso. Cada cierre es idempotente
     // y falla en silencio: que quede una sesion abierta de una corrida de
@@ -818,6 +840,377 @@ async function membresiasDe(idusuario) {
   return filas.map((f) => f.idcliente);
 }
 
+/**
+ * Fase 09: el segundo factor de punta a punta, por HTTP.
+ *
+ * Usa un usuario de prueba con **clave conocida** (`CLAVE_MFA`), porque hace
+ * falta pasar el paso 1 del login varias veces. Se crea, se usa y se borra al
+ * final; el `finally` de `mfaPorHttp` lo limpia aunque el recorrido falle a la
+ * mitad, y `limpiarUsuarioDePrueba` saca también los códigos de recuperación.
+ *
+ * Los códigos TOTP se calculan **descifrando el secret de la base** con la
+ * master key, o sea con el mismo `totp.js` que usa el backend. Eso no alcanza
+ * para probar el algoritmo —para eso están los vectores del RFC en
+ * `verificar-mfa.mjs`— pero sí para probar el camino: que el secret que se
+ * descifra sea el que el admin recibió, que el anti-reuso rechace el reuso y
+ * que un código de hace 3 períodos entre por la ventana de reloj.
+ */
+async function mfaPorHttp() {
+  const { MasterKeyService } = cargar('claves/master-key.service.js');
+  const totp = cargar('auth/totp.js');
+  const { descifrar } = cargar('claves/crypto.js');
+  const masterKey = new MasterKeyService(configServiceDelScript());
+
+  const USUARIO_MFA = 'verificacion-mfa';
+  const CLAVE_MFA = 'Verificacion-MFA-2026!a';
+  const USUARIO_ADMIN = 'verificacion-admin';
+  const CLAVE_ADMIN = 'Verificacion-Admin-2026!a';
+
+  seccion('Segundo factor: alta, pending, ingreso en dos pasos (Fase 09)');
+
+  /**
+   * El admin de las acciones de panel es un usuario **de prueba** con
+   * `admin_identidad` en el cliente, y no el admin real del repo.
+   *
+   * Es la razón por la que esta seccion no pide ninguna clave: un script de
+   * verificación que arranca con "Clave del admin:" es un script que no se puede
+   * correr en una máquina donde nadie conoce esa clave, y además obliga a que
+   * quien lo corre sea alguien. Con un admin de prueba con clave conocida, el
+   * script es autónomo y de paso prueba algo que el panel importa: que las
+   * acciones de MFA funcionan para **cualquier** `admin_identidad` del tenant, y
+   * no sólo para la cuenta con la que se administersa.
+   */
+  // Limpieza defensiva de una corrida anterior interrumpida. Un `Ctrl+C` en el
+  // medio de esta seccion deja los dos usuarios de prueba puestos, y la corrida
+  // siguiente falla con "Unique constraint failed" en el primer `create`, que
+  // no dice nada de la causa real. Borrarlos al empezar hace el script
+  // re-ejecutable sin que haya que acordarse de borrar a mano.
+  for (const usuarioViejo of [USUARIO_MFA, USUARIO_ADMIN]) {
+    const fila = await prisma.idn_usuario.findUnique({
+      where: { usuario: usuarioViejo },
+      select: { idusuario: true },
+    });
+    if (fila) {
+      await prisma.tok_mfa_challenge.deleteMany({ where: { idusuario: fila.idusuario } }).catch(() => {});
+      await prisma.idn_usuario_mfa_codigo.deleteMany({ where: { idusuario: fila.idusuario } }).catch(() => {});
+      await limpiarUsuarioDePrueba(fila.idusuario);
+      nota(`limpiado el "${usuarioViejo}" de una corrida anterior`);
+    }
+  }
+
+  const adminDePrueba = await prisma.idn_usuario.create({
+    data: {
+      usuario: USUARIO_ADMIN,
+      nombre: 'Verificacion',
+      apellido: 'Admin',
+      clave_hash: await hashear(CLAVE_ADMIN),
+      mfa_estado: 'off',
+      membresias: { create: { idcliente: CLIENTE, rol: 'admin_identidad' } },
+      membresiasAplicacion: { create: { idcliente: CLIENTE, idaplicacion: APP } },
+    },
+  });
+  const loginAdmin = await pedir('/auth/login', jsonPost({ usuario: USUARIO_ADMIN, clave: CLAVE_ADMIN }));
+  const cookieAdmin = esCookie(loginAdmin) ? cookieDe(cookieNueva(loginAdmin)) : null;
+  verificar('el admin de prueba entra al panel del cliente', cookieAdmin !== null,
+    cookieAdmin ? `sid=${(cookieNueva(loginAdmin) ?? '').slice(0, 8)}` : `HTTP ${loginAdmin.status}`);
+  if (!cookieAdmin) {
+    await limpiarUsuarioDePrueba(adminDePrueba.idusuario);
+    throw new Error('Sin sesion de admin no se puede seguir con la seccion de MFA.');
+  }
+  const sidAdmin = cookieNueva(loginAdmin);
+
+  // El usuario de prueba. `mfa_estado` arranca en `off`, que es el estado por
+  // defecto del DDL: toda la seccion empieza desde cero y comprueba que el
+  // default es `off`.
+  const dePrueba = await prisma.idn_usuario.create({
+    data: {
+      usuario: USUARIO_MFA,
+      nombre: 'Verificacion',
+      apellido: 'MFA',
+      clave_hash: await hashear(CLAVE_MFA),
+      mfa_estado: 'off',
+      membresias: { create: { idcliente: CLIENTE, rol: 'user' } },
+      membresiasAplicacion: { create: { idcliente: CLIENTE, idaplicacion: APP } },
+    },
+  });
+  nota(`usuarios de prueba "${USUARIO_MFA}" y "${USUARIO_ADMIN}" en "${CLIENTE}"`);
+
+  const sidsAbiertos = [];
+  try {
+    // 1. Con MFA apagado, el login es de un paso y crea sesion.
+    const loginNormal = await pedir('/auth/login', jsonPost({ usuario: USUARIO_MFA, clave: CLAVE_MFA }));
+    verificar('login sin MFA → 200 con sesion',
+      loginNormal.status === 200 && esCookie(loginNormal) && !loginNormal.json?.requiere_mfa);
+    const sidNormal = cookieNueva(loginNormal);
+    if (sidNormal) {
+      sidsAbiertos.push(sidNormal);
+    }
+    const sesionNormal = sidNormal
+      ? await prisma.tok_sesion.findUnique({ where: { sid: sidNormal }, select: { amr: true } })
+      : null;
+    verificar('la sesion sin segundo factor queda con amr=pwd', sesionNormal?.amr === 'pwd',
+      sesionNormal?.amr ?? '(sin sesion)');
+
+    // 2. El panel del admin activa MFA. Es la via de produccion (`specs/01` §8.1):
+    //    el `otpauth://` y los 10 codigos salen **una sola vez** de esta respuesta.
+    const activar = await pedir(`/admin/usuarios/${dePrueba.idusuario}/mfa`,
+      jsonPost({}, { ...cookieAdmin }));
+
+    verificar('el panel activa MFA → 200 con otpauth y 10 codigos',
+      activar.status === 200 && typeof activar.json?.otpauth === 'string' && activar.json?.codigos?.length === 10,
+      `HTTP ${activar.status} codigos=${activar.json?.codigos?.length ?? '-'}`);
+    verificar('la respuesta del alta dice unica_vez=true', activar.json?.unica_vez === true);
+    verificar('el otpauth lleva issuer=Tourniquet y secret',
+      /^otpauth:\/\/totp\/Tourniquet%3A/.test(activar.json?.otpauth ?? '') &&
+        (activar.json?.otpauth ?? '').includes('secret='));
+    verificar('el secret son 32 caracteres base32',
+      (activar.json?.clave ?? '').length === 32, activar.json?.clave ?? '');
+
+    // 3. En la base: `pending`, secret binario, 10 codigos hasheados.
+    const fila = await prisma.idn_usuario.findUnique({
+      where: { idusuario: dePrueba.idusuario },
+      select: { mfa_estado: true, mfa_secret_cifrada: true, mfa_ultimo_periodo: true },
+    });
+    verificar('el usuario queda en pending (todavia no pide codigo)', fila?.mfa_estado === 'pending',
+      fila?.mfa_estado ?? '-');
+    const secretoCifrado = Buffer.from(fila?.mfa_secret_cifrada ?? []);
+    verificar('mfa_secret_cifrada es binario, no texto',
+      secretoCifrado.length > 28 && !/^[\x20-\x7e]+$/.test(secretoCifrado.toString('latin1')),
+      `${secretoCifrado.length} bytes`);
+    verificar('mfa_ultimo_periodo arranca en NULL (nunca se acepto un codigo)',
+      fila?.mfa_ultimo_periodo === null || fila?.mfa_ultimo_periodo === undefined);
+
+    const codigos = await prisma.idn_usuario_mfa_codigo.findMany({
+      where: { idusuario: dePrueba.idusuario },
+      select: { codigo_hash: true, usado_en: true },
+    });
+    verificar('hay 10 codigos de recuperacion, hasheados y sin usar',
+      codigos.length === 10 && codigos.every((c) => /^[0-9a-f]{64}$/.test(c.codigo_hash) && c.usado_en === null));
+    verificar('los 10 hashes son distintos (10 codigos distintos)',
+      new Set(codigos.map((c) => c.codigo_hash)).size === 10);
+
+    // 4. `pending` NO pide codigo: el login sigue siendo de un paso.
+    const loginPending = await pedir('/auth/login', jsonPost({ usuario: USUARIO_MFA, clave: CLAVE_MFA }));
+    verificar('con MFA pending el login NO pide codigo (trampa 2 de la fase 09)',
+      loginPending.status === 200 && !loginPending.json?.requiere_mfa && esCookie(loginPending));
+    const sidPending = cookieNueva(loginPending);
+    if (sidPending) sidsAbiertos.push(sidPending);
+
+    // 5. Confirmacion: con un codigo de la app, `pending` → `on`.
+    const secreto = descifrar(secretoCifrado, masterKey.valorB64);
+    const cookiePendiente = sidPending ? cookieDe(sidPending) : {};
+    const confirmar = await pedir('/me/mfa/confirmar',
+      jsonPost({ codigo: totp.codigoActual(secreto) }, { ...cookiePendiente }));
+    verificar('POST /me/mfa/confirmar con el codigo correcto → estado on',
+      confirmar.status === 200 && confirmar.json?.estado === 'on', `HTTP ${confirmar.status}`);
+
+    // 6. Con `on`, el login responde 200 `requiere_mfa` y **no** deja sesion.
+    const antesDelLogin = await prisma.tok_sesion.count({
+      where: { idusuario: dePrueba.idusuario, cerrada_en: null },
+    });
+    const loginMfa = await pedir('/auth/login', jsonPost({ usuario: USUARIO_MFA, clave: CLAVE_MFA }));
+    verificar('con MFA on el login responde requiere_mfa=true',
+      loginMfa.status === 200 && loginMfa.json?.requiere_mfa === true, `HTTP ${loginMfa.status}`);
+    verificar('el desafio trae factor_id (uuid v4)',
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(loginMfa.json?.factor_id ?? ''),
+      loginMfa.json?.factor_id ?? '-');
+    verificar('el paso 1 NO escribe cookie de sesion', !esCookie(loginMfa));
+    verificar('el paso 1 NO crea fila en tok_sesion',
+      (await prisma.tok_sesion.count({ where: { idusuario: dePrueba.idusuario, cerrada_en: null } })) === antesDelLogin);
+    verificar('el desafio trae los 5 intentos y los codigos restantes',
+      loginMfa.json?.intentos_restantes === 5 && loginMfa.json?.codigos_restantes === 10);
+
+    const factor = loginMfa.json?.factor_id;
+
+    // 7. Un codigo incorrecto: 401, cuenta los intentos y NO crea sesion.
+    const malo = await pedir('/auth/mfa/verify', jsonPost({ factor_id: factor, codigo: '000000' }));
+    verificar('un codigo incorrecto → 401 mfa_incorrecto',
+      malo.status === 401 && malo.json?.codigo === 'mfa_incorrecto', `HTTP ${malo.status}`);
+    verificar('la respuesta dice cuantos intentos quedan',
+      malo.json?.intentos_restantes === 4, `${malo.json?.intentos_restantes ?? '-'}`);
+    verificar('un codigo incorrecto NO crea sesion',
+      (await prisma.tok_sesion.count({ where: { idusuario: dePrueba.idusuario, cerrada_en: null } })) === antesDelLogin);
+
+    // 8. El codigo correcto completa el login y la sesion queda `pwd,mfa`.
+    //
+    // El codigo es el del **periodo siguiente**, no el actual, y es deliberado: la
+    // confirmacion del paso 5 ya consumio el periodo actual
+    // (`mfa_ultimo_periodo`), asi que el mismo codigo seria "correcto y
+    // reutilizado" y el backend lo rechazaria por el anti-reuso. Usar el
+    // siguiente prueba, de paso, que la ventana +-1 acepta un codigo de periodo
+    // futuro, que es la mitad de la tolerancia de reloj.
+    const codigoOk = totp.codigoDePeriodo(secreto, totp.periodoDe() + 1);
+    const ok = await pedir('/auth/mfa/verify', jsonPost({ factor_id: factor, codigo: codigoOk }));
+    verificar('el codigo correcto → 200 con cookie de sesion',
+      ok.status === 200 && esCookie(ok), `HTTP ${ok.status}`);
+    const sidMfa = cookieNueva(ok);
+    if (sidMfa) sidsAbiertos.push(sidMfa);
+    verificar('el returnTo sale de la fila del desafio, no del pedido',
+      typeof ok.json?.returnTo === 'string', ok.json?.returnTo ?? '-');
+    const sesionMfa = sidMfa
+      ? await prisma.tok_sesion.findUnique({ where: { sid: sidMfa }, select: { amr: true } })
+      : null;
+    verificar('la sesion con segundo factor queda con amr=pwd,mfa',
+      sesionMfa?.amr === 'pwd,mfa', sesionMfa?.amr ?? '(sin sesion)');
+
+    // 9. Anti-reuso: el mismo codigo, en otro desafio, ya no sirve.
+    const segundo = await pedir('/auth/login', jsonPost({ usuario: USUARIO_MFA, clave: CLAVE_MFA }));
+    const reuso = await pedir('/auth/mfa/verify',
+      jsonPost({ factor_id: segundo.json?.factor_id, codigo: codigoOk }));
+    verificar('reusar el mismo codigo TOTP → 401 (trampa 1 de la fase 09)',
+      reuso.status === 401 && reuso.json?.codigo === 'mfa_incorrecto', `HTTP ${reuso.status}`);
+
+    // 10. Un factor_id invalido dice "volvé a ingresar" y no distingue el motivo.
+    const factorFalso = await pedir('/auth/mfa/verify',
+      jsonPost({ factor_id: '00000000-0000-4000-8000-000000000000', codigo: '123456' }));
+    verificar('un factor_id que no existe → 401 mfa_desafio_invalido',
+      factorFalso.status === 401 && factorFalso.json?.codigo === 'mfa_desafio_invalido',
+      `HTTP ${factorFalso.status}`);
+
+    // 11. Un codigo de hace 3 períodos NO entra (fuera de la ventana +-1).
+    const tercero = await pedir('/auth/login', jsonPost({ usuario: USUARIO_MFA, clave: CLAVE_MFA }));
+    const viejo = await pedir('/auth/mfa/verify', jsonPost({
+      factor_id: tercero.json?.factor_id,
+      codigo: totp.codigoDePeriodo(secreto, totp.periodoDe() - 3),
+    }));
+    verificar('un codigo de hace 3 periodos → 401', viejo.status === 401, `HTTP ${viejo.status}`);
+
+    // 12. Codigo de recuperacion: entra, y usarlo dos veces no.
+    const cuarto = await pedir('/auth/login', jsonPost({ usuario: USUARIO_MFA, clave: CLAVE_MFA }));
+    const recuperacion = (activar.json?.codigos ?? [])[0];
+    const conRecuperacion = await pedir('/auth/mfa/verify',
+      jsonPost({ factor_id: cuarto.json?.factor_id, codigo: recuperacion }));
+    verificar('un codigo de recuperacion completa el login',
+      conRecuperacion.status === 200 && esCookie(conRecuperacion), `HTTP ${conRecuperacion.status}`);
+    const sidRecuperacion = cookieNueva(conRecuperacion);
+    if (sidRecuperacion) sidsAbiertos.push(sidRecuperacion);
+
+    const quinto = await pedir('/auth/login', jsonPost({ usuario: USUARIO_MFA, clave: CLAVE_MFA }));
+    const reusoRecuperacion = await pedir('/auth/mfa/verify',
+      jsonPost({ factor_id: quinto.json?.factor_id, codigo: recuperacion }));
+    verificar('reusar un codigo de recuperacion → 401', reusoRecuperacion.status === 401,
+      `HTTP ${reusoRecuperacion.status}`);
+
+    // 13. `/me/mfa` del propio usuario: estado y codigos que quedan.
+    const estadoPropio = await pedir('/me/mfa',
+      sidRecuperacion ? cookieDe(sidRecuperacion) : {});
+    verificar('GET /me/mfa → estado on con 9 codigos',
+      estadoPropio.json?.estado === 'on' && estadoPropio.json?.codigos_restantes === 9,
+      `${estadoPropio.json?.codigos_restantes ?? '-'} codigos`);
+    verificar('el listado del panel NO trae el secret cifrado',
+      !(JSON.stringify(activar.json ?? {}).includes('mfa_secret_cifrada')));
+
+    // 14. El panel regenera los codigos: los anteriores dejan de servir.
+    const regenerar = await pedir(`/admin/usuarios/${dePrueba.idusuario}/mfa/codigos`,
+      jsonPost({}, { ...cookieAdmin }));
+    verificar('el panel regenera los codigos → 10 nuevos',
+      regenerar.status === 200 && regenerar.json?.codigos?.length === 10, `HTTP ${regenerar.status}`);
+    verificar('el conjunto de codigos es distinto al anterior',
+      !(regenerar.json?.codigos ?? []).includes(recuperacion));
+    const usadoAntes = await prisma.idn_usuario_mfa_codigo.count({
+      where: { idusuario: dePrueba.idusuario, usado_en: { not: null } },
+    });
+    verificar('los codigos anteriores quedan marcados como usados (invalidados)',
+      usadoAntes >= 10, `${usadoAntes} invalidados`);
+
+    // 15. El panel desactiva MFA y cierra las sesiones del cliente.
+    const desactivar = await pedir(`/admin/usuarios/${dePrueba.idusuario}/mfa`,
+      { method: 'DELETE', ...cookieAdmin });
+    verificar('el panel desactiva MFA y cierra las sesiones',
+      desactivar.status === 200 && desactivar.json?.estado === 'off' &&
+        desactivar.json?.sesiones_cerradas >= 1,
+      `HTTP ${desactivar.status} sesiones=${desactivar.json?.sesiones_cerradas ?? '-'}`);
+    const filaDespues = await prisma.idn_usuario.findUnique({
+      where: { idusuario: dePrueba.idusuario },
+      select: { mfa_estado: true, mfa_secret_cifrada: true },
+    });
+    verificar('al desactivar, el secret se borra y el estado vuelve a off',
+      filaDespues?.mfa_estado === 'off' && filaDespues?.mfa_secret_cifrada === null);
+
+    // 16. Volver a entrar es de un paso otra vez.
+    const loginFinal = await pedir('/auth/login', jsonPost({ usuario: USUARIO_MFA, clave: CLAVE_MFA }));
+    verificar('tras desactivar, el login vuelve a ser de un paso',
+      loginFinal.status === 200 && !loginFinal.json?.requiere_mfa && esCookie(loginFinal));
+    const sidFinal = cookieNueva(loginFinal);
+    if (sidFinal) sidsAbiertos.push(sidFinal);
+
+    // 17. La clave incorrecta sigue sin decir si el usuario existe.
+    const claveMala = await pedir('/auth/login',
+      jsonPost({ usuario: USUARIO_MFA, clave: 'otra-clave-que-no-es' }));
+    verificar('clave incorrecta con MFA activo → 401 antes de pedir el factor',
+      claveMala.status === 401 && claveMala.json?.codigo === 'clave_incorrecta' &&
+        !claveMala.json?.requiere_mfa,
+      `HTTP ${claveMala.status}`);
+
+    // --- Inventario de aplicaciones (9.4) --------------------------------------
+
+    seccion('Registro para el TenantRegistry: /registry/aplicaciones (Fase 09 §9.4)');
+
+    const apps = await pedir(`/registry/aplicaciones/${CLIENTE}`, { ...cookieAdmin });
+    verificar(`/registry/aplicaciones/${CLIENTE} → 200 para el admin del cliente`,
+      apps.status === 200 && Array.isArray(apps.json?.aplicaciones),
+      `HTTP ${apps.status} ${apps.json?.total ?? 0} app(s)`);
+    // Se miran las CLAVES de cada objeto, no el texto de la respuesta: un
+    // `/host/i` sobre el JSON marca "localhost" dentro de `url_inicio` y hace
+    // fallar la comprobacion con un falso positivo, que es peor que no
+    // comprobar. Lo que se verifica es que no exista ninguna clave prohibida.
+    const clavesProhibidas = ['usuario', 'credencial_cifrada', 'credencial', 'host', 'esquema'];
+    const claves = [];
+    const juntar = (v) => {
+      if (Array.isArray(v)) return v.forEach(juntar);
+      if (v && typeof v === 'object') {
+        for (const [k, valor] of Object.entries(v)) {
+          claves.push(k);
+          juntar(valor);
+        }
+      }
+    };
+    juntar(apps.json ?? {});
+    const filtradas = claves.filter((k) => clavesProhibidas.includes(k));
+    verificar('la respuesta NO trae usuario, host ni credencial (por nombre de clave)',
+      filtradas.length === 0, filtradas.length ? filtradas.join(',') : `${claves.length} clave(s): ${[...new Set(claves)].join(',')}`);
+    verificar('cada app trae codigo, nombre, url_inicio, estado y base',
+      (apps.json?.aplicaciones ?? []).every((a) =>
+        'codigo' in a && 'nombre' in a && 'url_inicio' in a && 'estado' in a && 'base' in a));
+
+    const appsAjenas = await pedir(`/registry/aplicaciones/${OTRO_CLIENTE}`, { ...cookieAdmin });
+    verificar(`un admin de ${CLIENTE} NO lee /registry/aplicaciones/${OTRO_CLIENTE}`,
+      appsAjenas.status === 403 && appsAjenas.json?.codigo === 'sin_permiso',
+      `HTTP ${appsAjenas.status}`);
+
+    const appsSinSesion = await pedir(`/registry/aplicaciones/${CLIENTE}`);
+    verificar('/registry/aplicaciones sin cookie → 401',
+      appsSinSesion.status === 401 && appsSinSesion.json?.codigo === 'sesion_requerida',
+      `HTTP ${appsSinSesion.status}`);
+
+    // --- La rotacion apagada por default (9.2) ---------------------------------
+
+    seccion('Rotacion de claves: apagada por default (Fase 09 §9.2)');
+
+    const rotacion = await pedir('/operacion/claves', { ...cookieAdmin });
+    verificar('GET /operacion/claves sin TQ_ROTACION_HABILITADA → 404 (no 403)',
+      rotacion.status === 404, `HTTP ${rotacion.status}`);
+    const rotar = await pedir('/operacion/claves/rotar', jsonPost({}, { ...cookieAdmin }));
+    verificar('POST /operacion/claves/rotar apagado → 404', rotar.status === 404, `HTTP ${rotar.status}`);
+    const rotarConBody = await pedir('/operacion/claves/reactivar',
+      jsonPost({ kid: '0123456789abcdef' }, { ...cookieAdmin }));
+    verificar('POST /operacion/claves/reactivar apagado → 404', rotarConBody.status === 404,
+      `HTTP ${rotarConBody.status}`);
+    const rotarSinSesion = await pedir('/operacion/claves');
+    verificar('GET /operacion/claves sin sesion → 404 tambien (el guard va primero)',
+      rotarSinSesion.status === 404, `HTTP ${rotarSinSesion.status}`);
+  } finally {
+    for (const sid of [...sidsAbiertos, sidAdmin].filter(Boolean)) {
+      await sesionesSvc.cerrar(sid, 'logout').catch(() => {});
+    }
+    await prisma.tok_mfa_challenge.deleteMany({ where: { idusuario: dePrueba.idusuario } }).catch(() => {});
+    await prisma.idn_usuario_mfa_codigo.deleteMany({ where: { idusuario: dePrueba.idusuario } }).catch(() => {});
+    await limpiarUsuarioDePrueba(dePrueba.idusuario);
+    await limpiarUsuarioDePrueba(adminDePrueba.idusuario);
+    nota('usuarios de prueba de MFA borrados');
+  }
+}
+
 // La corrida arranca ACA, al final del archivo y no arriba: las ayudantes son
 // `const` y estarian en zona muerta si `ejecutar` se llamara antes de que el modulo
 // los haya evaluado.
@@ -826,7 +1219,7 @@ try {
   console.log('\n  ' + '-'.repeat(68) + '\n');
   console.log(
     fallos === 0
-      ? '  TODO OK: los criterios de aceptacion de las Fases 07 y 08 pasan.\n'
+      ? '  TODO OK: los criterios de aceptacion de las Fases 07, 08 y 09 pasan.\n'
       : `  ${fallos} COMPROBACION(ES) FALLIDA(S)\n`,
   );
   process.exit(fallos === 0 ? 0 : 1);

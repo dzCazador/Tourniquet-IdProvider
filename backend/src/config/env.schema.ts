@@ -125,7 +125,36 @@ export const ESQUEMA_ENTORNO = Joi.object({
     .optional()
     .description(
       'Origenes permitidos, separados por coma. Vacio = CORS deshabilitado. ' +
-        'Nunca `*`: cada app declara su origen exacto en `cat_aplicacion.origenes`.',
+        'Nunca `*`: cada app declara su origen exacto en cat_aplicacion.origenes.',
+    ),
+
+  // --- Rotacion de claves de firma (specs/01 §5.1) ---------------------------
+  //
+  // Las dos variables de la rotacion viven juntas y por el mismo motivo: la
+  // rotacion es de la INSTALACION (el JWKS es unico), no de un cliente, asi que
+  // no cabe en un rol de `idn_usuario_cliente.rol` —que es por tenant— y queda
+  // en la configuracion, con una bandera que la apaga entera.
+
+  TQ_ROTACION_HABILITADA: Joi.boolean()
+    .truthy('true', '1', 'si', 'yes')
+    .falsy('false', '0', 'no', '')
+    .default(false)
+    .description(
+      'Enciende POST /operacion/claves/rotar y GET /operacion/claves. Por default ' +
+        'false: el procedimiento normal es manual, con `npm run rotar:clave` y el ' +
+        'runbook de deploy/runbooks/rotacion-claves.md. Con la variable apagada el ' +
+        'endpoint responde 404, no 403 (specs/01 §5.1).',
+    ),
+
+  TQ_OPERADORES_CLAVES: Joi.string()
+    .allow('')
+    .optional()
+    .description(
+      'Logins (separados por coma) autorizados a rotar las claves de firma de la ' +
+        'instalacion. Requiere sesion de portal viva: es una operacion para una ' +
+        'persona, no para un proceso. Vacio = nadie, y el endpoint sigue apagado ' +
+        'aunque TQ_ROTACION_HABILITADA=true. Comparacion exacta y en minusculas ' +
+        '(los logins se guardan en minuscula).',
     ),
 })
   // Se permiten variables desconocidas a proposito: el proceso puede correr en
@@ -145,6 +174,10 @@ export interface Entorno {
   ACCESS_TTL_MIN: number;
   RATE_LIMIT_POR_MINUTO: number;
   CORS_ORIGIN?: string;
+  /** Con `true`, `/operacion/claves` existe. Default `false` (`specs/01` §5.1). */
+  TQ_ROTACION_HABILITADA: boolean;
+  /** Logins autorizados a rotar. Vacio = nadie. */
+  TQ_OPERADORES_CLAVES?: string;
 }
 
 /**

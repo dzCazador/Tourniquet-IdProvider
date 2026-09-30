@@ -78,9 +78,10 @@ derivado se pasa, se abrevia el *resto*, nunca el prefijo de función.
 
 | Tabla | Columnas principales | Notas |
 |---|---|---|
-| `idn_usuario` | `idusuario` uniqueidentifier PK, `usuario` nvarchar(50) **unique** (minúscula), `nombre`, `apellido`, `email` null, `clave_hash` nvarchar(255) argon2id, `mfa_secret_cifrada` null, `mfa_estado` (`off\|pending\|on`), `estado` (`activo\|bloqueado\|inactivo`), `intentos_fallidos` int, `bloqueado_hasta` datetime2 null, `creado_en`, `actualizado_en` | Identidad global. El mapeo a `user_per.iduser` de cada base vive en la app (Fase 02, `specs/03`); **no** se copia aquí |
+| `idn_usuario` | `idusuario` uniqueidentifier PK, `usuario` nvarchar(50) **unique** (minúscula), `nombre`, `apellido`, `email` null, `clave_hash` nvarchar(255) argon2id, `mfa_secret_cifrada` null, `mfa_estado` (`off\|pending\|on`), `mfa_ultimo_periodo` bigint null, `estado` (`activo\|bloqueado\|inactivo`), `intentos_fallidos` int, `bloqueado_hasta` datetime2 null, `creado_en`, `actualizado_en` | Identidad global. El mapeo a `user_per.iduser` de cada base vive en la app (Fase 02, `specs/03`); **no** se copia aquí |
 | `idn_usuario_cliente` | (`idusuario`,`idcliente`), `rol` (`user\|admin_identidad`), `creado_en` | Membresía al tenant. `admin_identidad` puede habilitar accesos de ese cliente (Fase 03); no es permiso de negocio |
 | `idn_usuario_cliente_aplicacion` | (`idusuario`,`idcliente`,`idaplicacion`), `creado_en` | Habilitación de ingreso por app. **Sólo** controla *entrar o no*, nunca qué ve dentro |
+| `idn_usuario_mfa_codigo` | `id` bigint IDENTITY PK, `idusuario`, `codigo_hash` nvarchar(64) **unique**, `creado_en`, `usado_en` null | Códigos de recuperación del segundo factor: 10 por usuario, de un solo uso (Fase 09, `specs/01` §8.5). El hash es `sha256(codigo_normalizado + idusuario)`: sha256 **con sal por usuario**, porque 10 caracteres de un alfabeto de 28 son ~48 bits y un sha256 sin sal deja el ataque por diccionario a un atacante con una GPU. La sal es el mismo UUID que ya viaja en `sub`, o sea pública a propósito: lo que evita es la tabla precalculada, no esconder el UUID |
 
 ### Sesiones y tokens
 
@@ -91,6 +92,7 @@ derivado se pasa, se abrevia el *resto*, nunca el prefijo de función.
 | `tok_refresh_token.motivo` | nvarchar(20), lista cerrada **propia**: `logout`, `revocada`, `replay`, `expirada`, `rotado`, `reemplazado` | Es el motivo a nivel **token**, y por eso tiene dos valores que no son cierres de sesión (`rotado`, `reemplazado`) y **no** tiene los cinco del panel. Cuando un admin fuerza el cierre, la familia se revoca con `revocada` y el motivo humano queda en `tok_sesion.motivo_cierre` y en `aud_login.detalle`: el motivo de una persona no describe un refresh, y ensuciar esta lista con valores de panel haría que "por qué murió este refresh" dejara de ser una pregunta con respuesta |
 | `tok_autorization_code` | `id` bigint IDENTITY PK, `sid` (sesión **de la app**), `idaplicacion`, `code_hash` nvarchar(128) unique (sha256), `code_challenge` nvarchar(128), `method` ('S256'), `redirect_uri`, `state_hash` null, `creado_en`, `expira_en` (+60 s), `usado_en` null | PKCE; persistido porque el authorize y el token pueden caer en instancias distintas. `code_hash` y `state_hash` son sha256: **ni el code ni el `state` en claro**, ni en la base ni en un log |
 | `tok_refresh_token` | `id` bigint IDENTITY PK, `sid`, `idaplicacion`, `token_hash` nvarchar(64) unique (sha256), `creado_en`, `expira_en`, `usado_en` null, `reemplazado_por` null, `revocado_en` null, `motivo` null | Rotación estricta: `usado_en` + reuso ⇒ revocar la familia del `sid` |
+| `tok_mfa_challenge` | `id` uniqueidentifier PK (= el `factor_id` del login en dos pasos), `idusuario`, `idcliente`, `return_to` nvarchar(1000), `ip`, `user_agent` nvarchar(500), `creado_en`, `expira_en` (+5 min), `intentos` smallint, `usado_en` null | Estado de un **login en curso** que todavía no es sesión (Fase 09, `specs/01` §8.2). Vive en `tok_` y no en `idn_` porque su vida es la del intento, no la de la persona: si viviera en `idn_usuario`, un login a medias y un segundo factor enrolado se pisarían. Es de un solo uso (`usado_en`) y 5 intentos la matan, y **guarda el `idcliente` y el `return_to` ya resueltos** para que `POST /auth/mfa/verify` no tenga que creerle nada al cliente. FK `idusuario` y `idcliente` con `ON DELETE NO ACTION`: es un login en curso, y que se caiga el usuario es un evento raro que se mira, no un `CASCADE` |
 
 ### Infraestructura de seguridad
 
@@ -109,6 +111,16 @@ derivado se pasa, se abrevia el *resto*, nunca el prefijo de función.
   de la app.
 - `cat_base_datos(idcliente,idaplicacion)` único filtrado `WHERE estado='activo'` (una base
   activa por combinación).
+- `idn_usuario_mfa_codigo(codigo_hash)` único (es la búsqueda del código de recuperación) e
+  `(idusuario, usado_en)` para contar los que le quedan a un usuario sin recorrer los usados.
+- `tok_mfa_challenge(expira_en)` (el job 95 lo purga junto con los códigos, cada 5 min) y
+  `(idusuario)` para el diagnóstico de un login atascado.
+
+**Por qué los tres índices de las tablas de la Fase 09 están declarados acá y no "si alguna vez
+hacen falta":** cada uno es el `WHERE` de una consulta que la fase entrega. `codigo_hash` es
+único porque es la única forma de encontrar un código de recuperación (y sin unicidad, dos
+filas con el mismo hash harían que "usar el código" sea ambiguo); `(idusuario, usado_en)` es el
+"¿cuántos códigos le quedan?" que muestra `/mi-cuenta`; `expira_en` es el `DELETE` del job 95.
 
 ## 5. DDL y procedimiento (hereda la política de RHPro)
 
@@ -140,6 +152,13 @@ mano: se corrige el SQL que falta.
 `CHECK`) para comparar (A) contra (B): **cero diferencias** es el criterio de aceptación de
 cualquier fase que cambie el esquema. Detalle del procedimiento en `deploy/README.md`.
 
+**La huella cubre las cuatro familias** (`cat_`, `idn_`, `tok_`, `aud_`). Hasta la Fase 09
+filtraba **sólo `cat_*`**, y el filtro era invisible en el resultado: un incremental que agregana
+una tabla de `idn_` o de `tok_` —o una columna en una de ellas— pasaba la comparación sin
+aparecer en ninguno de los dos lados, y la "cero diferencias" era cierta porque la huella no
+miraba. Se arregló en la Fase 09, que es la primera que agrega tablas fuera de `cat_`, pero
+corrigió el origen: el error era de **alcance de la verificación**, no del SQL.
+
 Numeración: `00-` creación desde cero · `01-`–`89-` incrementales (un cambio por archivo) ·
 `90-`–`94-` semillas · `95-`–`98-` jobs de limpieza y retención · `99-` verificación. **Un
 número retirado no se reutiliza**: una base que aplicó el `07` no puede recibir después un `07`
@@ -147,6 +166,14 @@ distinto.
 
 `deploy/sql/_plantilla-incremental.sql` documenta cómo se escribe un incremental (idempotencia,
 lotes por `GO`, qué no va en un `.sql`). No se ejecuta.
+
+**Los jobs `95-`–`98-` son T-SQL puro, idempotentes y sin `USE`**, y eso es lo que les permite
+agendarse de dos maneras sin cambios: en **SQL Agent** si el motor es SQL Server completo, o con
+`sqlcmd` desde el **Planificador de tareas de Windows** si el motor es **SQL Server Express**,
+que no tiene Agente. En los dos casos el trabajo lo crea y lo agenda el usuario, con una cuenta y
+permisos mínimos: son `DELETE` sobre tablas de la base de control y no necesitan `TQ_MASTER_KEY`
+ni hablar con la aplicación. El procedimiento paso a paso está en
+`deploy/runbooks/jobs-limpieza.md` y la decisión, en `specs/01` §7.1.
 
 **Lo que nunca va en un `.sql`**, por ser credenciales con cifrado no determinista o por ser
 secretos: usuarios y hashes (van por `scripts/bootstrap-admin.mjs`, argon2id en el momento),

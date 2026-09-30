@@ -67,7 +67,30 @@ export type CodigoDetalle =
   | 'admin_habilita_app'
   | 'admin_deshabilita_app'
   | 'admin_cierra_sesion'
-  | 'admin_cierra_sesiones_usuario';
+  | 'admin_cierra_sesiones_usuario'
+  // MFA (Fase 09). Los cuatro primeros son del **login en dos pasos**: el
+  // `idusuario` de esas filas es el usuario que esta verificando su segundo
+  // factor, no un admin. Los tres `admin_` son del panel, con el criterio de
+  // `specs/01` §7: `idusuario` = quien actuo, el afectado en el `detalle`.
+  //
+  // `mfa_requerido` es la fila que hace posible ver un ataque de fuerza bruta
+  // sobre el segundo factor: dice "la clave de esta persona es correcta y el
+  // factor no". Sin ella, un ingreso fallido a MFA sería indistinguible de una
+  // clave mala en la lectura del panel.
+  | 'mfa_requerido'
+  | 'mfa_ok'
+  | 'mfa_incorrecto'
+  | 'mfa_desafio_invalido'
+  | 'mfa_confirmado'
+  | 'mfa_desactivado'
+  | 'admin_activa_mfa'
+  | 'admin_desactiva_mfa'
+  | 'admin_regenera_codigos_mfa'
+  // Rotacion de claves de firma (Fase 09, `specs/01` §5.1). El prefijo `op_` y no
+  // `admin_` porque NO es una accion de un tenant: es de la instalacion entera, y
+  // el detalle lo dice asi en la lectura.
+  | 'op_rotacion_claves'
+  | 'op_reactivacion_claves';
 
 /**
  * `detalle` de una fila: el codigo solo, o el codigo seguido de los
