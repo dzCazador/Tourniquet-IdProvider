@@ -139,10 +139,10 @@ VALUES
 -- el back y front de cada cliente se anota en `cat_base_datos.notas`.
 INSERT INTO #clientes (codigo, nombre)
 VALUES
-    (N'cervi',     N'Cerveceria Cervi'),
-    (N'marcelino', N'Cerveceria Marcelino'),
-    (N'jugos',     N'Jugos'),
-    (N'santander', N'Santander');
+    (N'cervi',     N'RRHH Cervi'),
+    (N'marcelino', N'RRHH Marcelino'),
+    (N'jugos',     N'RRHH Jugos'),
+    (N'santander', N'RRHH Santander');
 
 -- Inventario de bases de negocio. SOLO INVENTARIO: sin contrasena.
 -- `usuario` = N'sin_registrar' cuando todavia no se sabe el login (ver la nota
@@ -218,6 +218,19 @@ BEGIN
         -- Se actualiza el nombre: la semilla es la fuente de la verdad del
         -- catalogo, y un nombre desactualizado se ve raro en el portal. NO se
         -- tocan las apps del cliente ni su estado: eso decidio una persona.
+        --
+        -- OJO ANTES DE USAR ESTO EN UNA INSTALACION REAL (Fase 04, anotado el
+        -- 2026-09-29): este UPDATE pisa el `nombre` de un cliente que ya tiene
+        -- un nombre real. En `tourniquet_dev` se noto cuando los clientes se
+        -- renombraron a sus nombres de verdad (RRHH Cervi, RRHH Santander
+        -- Chile, ...) y un `npm run sql:dev` de rutina los devolvio a
+        -- "RRHH Cervi". Decision conscious del 2026-09-29: la semilla
+        -- sigue siendo la fuente de la verdad del catalogo, y el nombre real
+        -- se carga por SQL propio cuando se esta instalando un cliente.
+        -- Si alguna vez molesta, el arreglo es SACAR este UPDATE (y con el el
+        -- `nombre` pasa a ser dato de una persona, igual que `estado` y las
+        -- apps) y no agregar una bandera: dos fuentes de verdad para la misma
+        -- columna es peor que una sola.
         UPDATE dbo.cat_cliente
         SET nombre = @nombre
         WHERE codigo = @codigo;

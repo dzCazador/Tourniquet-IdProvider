@@ -130,11 +130,50 @@ Las otras tres cosas van por script, y no es puritanismo:
 | Qué | Por qué no va en el `.sql` | Cómo entra |
 |---|---|---|
 | Primer admin | La clave se hashea con argon2id **en el momento**. Un hash en un `.sql` versionado es una credencial en el repo | `scripts/bootstrap-admin.mjs` |
+| Cambio de clave de un usuario | Igual que arriba, y además **no puede ser un `.sql`**: hay que rehashear con argon2id, limpiar el bloqueo y cerrar las sesiones vivas de esa persona, y son cuatro pasos que alguien tiene que hacer igual cada vez | `scripts/resetear-clave.mjs` |
 | Credencial de la base de negocio | El `iv(12)‖tag(16)‖ciphertext` se genera con IV **aleatorio por registro**. No se puede escribir en un `.sql`: un IV fijo reutilizado con GCM rompe la confidencialidad por completo | `scripts/registrar-base.mjs` |
 | Clave de firma RSA | La master key vive en el entorno, nunca en la base | `scripts/generar-clave.mjs` |
 
 `.gitignore` no protege un archivo ya commiteado. Un `.sql` es exactamente el tipo de archivo
 que alguien abre, edita, y commitea.
+
+---
+
+## Olvidé la clave: `npm run resetear:clave`
+
+El admin se queda sin clave, o la bloquea con cinco intentos y no recuerda cuál era. El script
+es deliberadamente **mínimo y manual**: pide la clave con eco oculto, valida la misma política
+mínima que el alta, limpia el contador de intentos y el bloqueo, y **cierra las sesiones vivas de
+ese usuario en todos los clientes** — cambiarle la clave y dejarlo adentro con un refresh de 7
+días no habría cambiado nada.
+
+```bash
+npm run resetear:clave -- --listar          # ver usuarios, intentos y bloqueos
+npm run resetear:clave -- --usuario admin   # cambiar la clave de uno
+```
+
+Tres cosas que **no** hace, y por qué:
+
+- **No es un endpoint HTTP.** Quien puede correrlo ya tiene el archivo de la base y la master key:
+  ya ganó. Una ruta de recuperación expuesta sin factor de recuperación es peor que no tener
+  puerta.
+- **No manda correo ni SMS.** No hay nada que auditar como `aud_login` más allá del log del
+  proceso, y "olvidé mi clave" por correo es un camino de robo de cuentas esperando su
+  implementación. Eso es la Fase 08, con su flujo diseñado.
+- **No da ni quita de alta** al usuario. Si la cuenta está dada de baja, el camino es otro.
+
+Un usuario **con historial de auditoría no se puede borrar** desde la app:
+`aud_login.idusuario` es `ON DELETE NO ACTION` y es a propósito, porque `aud_login` es append-only
+(invariante de `AGENTS.md`: nunca se borra auditoría desde código de negocio). El `DELETE` de un
+usuario con logins previos falla con FK.
+
+Los fixtures que crea una corrida de verificación (los `f04.*`, `prueba.*`) caen en eso. Se borran
+igual, pero **a mano y en orden inverso al de las FK**: `tok_refresh_token` y
+`tok_autorization_code` por `sid`, `tok_sesion`, `idn_usuario_cliente_aplicacion`,
+`idn_usuario_cliente`, las filas de `aud_login` de ese usuario, y recién ahí `idn_usuario`. Es la
+única operación que la base prohíbe y que hay que hacer a propósito, y solo en `tourniquet_dev`:
+en una instalación real, un usuario con auditoría se **deshabilita** (`estado = 'inactivo'`), nunca
+se borra.
 
 ---
 

@@ -1,5 +1,7 @@
 import { Module } from '@nestjs/common';
 import { AuthModule } from '../auth/auth.module';
+import { AuthController } from '../auth/auth.controller';
+import { PortalService } from '../auth/portal.service';
 import { ClavesModule } from '../claves/claves.module';
 import { FirmaService, JwkFirma } from '../claves/firma.service';
 import { AplicacionService } from './aplicacion.service';
@@ -38,6 +40,12 @@ const TTL_JWKS_INTERNO_MS = 60 * 1000;
  * responsabilidad (sesiones, claims, registro de apps, validacion), no por
  * endpoint, para que el canje, la revocacion y el logout compartan exactamente
  * las mismas reglas de cierre de sesion.
+ *
+ * `AuthController` es la excepcion y esta a proposito: `/auth/login` escribe
+ * una fila de `tok_sesion` y la cookie que la apunta sale de `oidc/cookies.ts`,
+ * asi que el controlador necesita a `SesionService`, que es provider de aca. Se
+ * declara desde este modulo para no hacer `AuthModule <-> OidcModule`
+ * circular. El archivo vive en `auth/`; ver el comentario del controlador.
  */
 @Module({
   imports: [ClavesModule, AuthModule],
@@ -49,10 +57,12 @@ const TTL_JWKS_INTERNO_MS = 60 * 1000;
     RevokeController,
     LogoutController,
     UserinfoController,
+    AuthController,
   ],
   providers: [
     AplicacionService,
     SesionService,
+    PortalService,
     ClaimsService,
     JtiCacheService,
     JwksCacheService,

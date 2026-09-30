@@ -37,7 +37,36 @@ Convenciones del repo para agentes: **`AGENTS.md`**.
 ## Por dónde se empieza
 
 1. `specs/00-arquitectura.md` y `specs/04-fases.md` — el marco.
-2. `specs/todo/begin/README.md` — el índice; después, la Fase 00.
+2. `specs/todo/begin/README.md` — el índice y el estado real de cada fase; después, la Fase 05.
 3. El portal se dibuja con `specs/todo/begin/estetica-tourniquet.md`: la estética gótica sale de la
    canción *Tourniquet* de Marilyn Manson (letra como guía de tono y motivo visual), con los
    requisitos de accesibilidad y de contrato de seguridad por encima del tema.
+
+## Levantar el portal (desarrollo)
+
+El backend y el frontend son dos procesos y **no comparten `.env`**: el del
+backend vive en la raíz, el del portal en `frontend/.env` (Next lee
+`.env`, `.env.local`, `.env.development`… desde la carpeta del frontend, en ese
+orden de prioridad).
+
+```bash
+# 1. raiz: base de control, master key y admin
+npm run sql:dev
+npm run generar:clave
+npm run bootstrap:admin
+
+# 2. la API (3001)
+npm run start --workspace backend
+
+# 3. el portal (3002), en otra terminal
+cd frontend && npm run dev
+```
+
+**¿Olvidaste la clave del admin?** `npm run resetear:clave -- --usuario admin`
+(te la pide con eco oculto). Es un script de consola a propósito, no una ruta
+de "recuperación por correo": ver `deploy/README.md`.
+
+`CORS_ORIGIN` tiene que traer `http://localhost:3002` en el `.env` de la raíz, y
+`frontend/.env` tiene que traer `NEXT_PUBLIC_API_URL=http://localhost:3001` —el
+build **corta** si falta, porque en un export estático la URL queda incrustada en
+el bundle. Detalle en `specs/todo/begin/README.md`.

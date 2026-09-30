@@ -11,16 +11,17 @@ nueva, se ejecuta de a una y se cierra con sus criterios de aceptación verifica
 
 ## Estado
 
-**Repo vacío**: no hay `backend/`, `frontend/`, `deploy/`, `scripts/`, `package.json` ni commits.
-Todo lo que sigue hay que crearlo. Las fases 00-01 son las que arrancan.
+El repo **ya no está vacío**: la 01, la 02, la 03 y la 04 están hechas y
+verificadas — la 04 con 78 comprobaciones por HTTP, sobre la base de control, y
+61 en Chrome contra el export real.
 
 | Fase | Título | Repo | SQL del usuario | Estado |
 |------|--------|------|:---------------:|--------|
 | [00](fase-00-login-local-rhpro.md) | Login local real contra `user_per` | RHPro | **Sí** | ⬜ Pendiente |
-| [01](fase-01-scaffold-control.md) | Scaffold del repo + base de control `cat_*` / `idn_*` / `tok_*` / `aud_*` | Tourniquet | **Sí** (prod) | ⬜ Pendiente |
+| [01](fase-01-scaffold-control.md) | Scaffold del repo + base de control `cat_*` / `idn_*` / `tok_*` / `aud_*` | Tourniquet | **Sí** (prod) | ✅ Completada |
 | [02](fase-02-identidad-y-claves.md) | Identidad: argon2id, bootstrap, claves de firma, auditoría | Tourniquet | No | ✅ Completada y verificada |
-| [03](fase-03-nucleo-oidc.md) | Núcleo OIDC: discovery, JWKS, authorize, token, revoke, logout | Tourniquet | No | ⬜ Pendiente |
-| [04](fase-04-portal-login.md) | Portal: login, tema gótico, callback decodificado | Tourniquet | No | ⬜ Pendiente |
+| [03](fase-03-nucleo-oidc.md) | Núcleo OIDC: discovery, JWKS, authorize, token, revoke, logout | Tourniquet | No | ✅ Completada y verificada |
+| [04](fase-04-portal-login.md) | Portal: login, tema gótico, callback decodificado | Tourniquet | No | ✅ Completada y verificada |
 | [05](fase-05-registro-demo.md) | Registro demo: cliente, app, base, alta de usuario | Tourniquet | **Sí** (semilla) | ⬜ Pendiente |
 | [06](fase-06-rhpro-dual-guard.md) | RHPro como relying party (guard dual + `idp_sub`) | RHPro | **Sí** | ⬜ Pendiente |
 | [07](fase-07-portal-lanzador.md) | Portal lanzador: membresías y lista de apps | Tourniquet | No | ⬜ Pendiente |
@@ -28,6 +29,16 @@ Todo lo que sigue hay que crearlo. Las fases 00-01 son las que arrancan.
 | [09](fase-09-endurecimiento.md) | Endurecimiento: MFA, rotación, jobs, export de registro | Tourniquet | **Sí** (jobs) | ⬜ Pendiente |
 | [10](fase-10-despliegue-cliente.md) | Despliegue en un cliente: runbooks e instalación | — | **Sí** | ⬜ Pendiente |
 | [11](fase-11-cierre-fase-01.md) | Cierre de la Fase 01 de `specs/04` | — | No | ⬜ Pendiente |
+
+**Lo único que quedó sin verificar de la 04** es la burbuja del gestor de
+contraseñas de **Firefox**: no había Firefox en la máquina. Los prerrequisitos
+que el gestor inspecciona están comprobados, y en Chrome se midió de verdad.
+
+**P3 del §"Cosas que hay que decidir antes de arrancar"**, ya resuelta en la 04:
+el portal se pintó **austero con el tema en el marco** (anillo, placa grabada,
+filete `oxblood`, `Cinzel` en el título) y **no** austero plano. La razón y el
+límite de esa línea están en "Decisiones que tomó esta fase", en el archivo de la
+04.
 
 ### Documento transversal
 
@@ -55,6 +66,25 @@ Todo lo que sigue hay que crearlo. Las fases 00-01 son las que arrancan.
 
 `11` no es código: es el acta de cierre de la Fase 01 de `specs/04`. Se puede hacer en cualquier
 momento posterior a la 05.
+
+### El frontend, a partir de la 04
+
+`frontend/` es **App Router** en `src/app/`, con `output: 'export'` y Tailwind.
+La 01 lo había dejado en Pages Router con una sola página de arranque; la 04 lo
+migró porque `estetica-tourniquet.md` §10 describe los archivos en `src/design/`
+y `src/app/`, y porque `next/font` (las cinco tipografías auto-alojadas que pide
+§3) solo se puede usar en App Router o en `_app`.
+
+Dos cosas del build que hay que saber antes de tocarlo:
+
+- **`next build` corta si falta `NEXT_PUBLIC_API_URL`.** En un export estático
+  la URL de la API queda incrustada en el bundle, así que sin la variable el
+  portal desplegado apuntaría a la `localhost` del navegador de cada usuario, y
+  el build terminaría "bien". La comprobación está en `frontend/next.config.js`.
+- **Después del build, `out/dev` se borra.** `/dev/token` es una herramienta de
+  desarrollo y no puede quedar en un build de producción: el HTML lo saca
+  `notFound()` y el archivo lo borra `frontend/scripts/quitar-rutas-dev.mjs`
+  (explicado en la 04, "Decisiones que tomó esta fase", punto 5).
 
 ---
 

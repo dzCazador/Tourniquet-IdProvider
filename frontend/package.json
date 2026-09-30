@@ -2,11 +2,12 @@
   "name": "tourniquet-frontend",
   "version": "1.0.0",
   "private": true,
-  "description": "Tourniquet Next.js portal (static export)",
+  "description": "Tourniquet Next.js portal (static export, App Router)",
   "scripts": {
-    "build": "next build",
-    "start": "next start",
-    "lint": "eslint . --fix"
+    "dev": "next dev -p 3002",
+    "build": "next build && node scripts/quitar-rutas-dev.mjs",
+    "start": "next start -p 3002",
+    "lint": "eslint ."
   },
   "dependencies": {
     "next": "14.0.0",
@@ -14,7 +15,13 @@
     "react-dom": "^18.2.0"
   },
   "devDependencies": {
-    "@types/react": "19.3.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "autoprefixer": "^10.4.0",
+    "eslint": "^8.57.0",
+    "eslint-config-next": "14.0.0",
+    "postcss": "^8.4.0",
+    "tailwindcss": "^3.4.0",
     "typescript": "^5.0.0"
   }
 }

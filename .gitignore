@@ -13,6 +13,10 @@ next/
 .next/
 out/
 
+# Cache incremental de TypeScript. `tsc --noEmit` con `incremental: true`
+# escribe un .tsbuildinfo junto al tsconfig, y no es un artefacto del repo.
+*.tsbuildinfo
+
 # Logs
 *.log
 logs/

@@ -21,6 +21,10 @@ export type CodigoDetalle =
   | 'usuario_inactivo'
   | 'rate_limit'
   | 'error_interno'
+  // Login del portal (Fase 04). `returnto_invalido` se escribe con
+  // `idusuario IS NULL` a proposito: se rechaza antes de verificar la clave,
+  // asi que todavia no se sabe de que usuario se trata.
+  | 'returnto_invalido'
   // Flujo OIDC (Fase 03). Mismo criterio: un codigo corto que dice **que paso**,
   // nunca el valor de la credencial. Los `code` y los refresh se anotan
   // hasheados (primeros 8 hex) en el `detalle`, jamas completos.

@@ -1,0 +1,83 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * Base del portal.
+ *
+ * Regla de la casa (`estetica-tourniquet.md` §10): aca no hay ni un hex. Todo
+ * sale de `theme()`, que lee los tokens. `grep "#[0-9a-f]{6}"` sobre
+ * `src/app` tiene que dar cero.
+ */
+
+@layer base {
+  html {
+    background-color: theme('colors.tinta');
+    color: theme('colors.hueso');
+    /* El tema es oscuro por origen, no por preferencia: forzar `color-scheme`
+       hace que el navegador dibuje los controles nativos (el ojo de la clave,
+       el autocompletado) en la variante correcta en vez de invertirlos. */
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: theme('colors.tinta');
+    color: theme('colors.hueso');
+    font-family: theme('fontFamily.interfaz');
+    font-size: theme('fontSize.chico');
+    line-height: 1.5;
+    /* El fondo es un plano de acero: dos gradientes radiales muy apagados y
+       nada de imagen. Cuesta 0 KB de red y no se ve en un monitor de
+       escritorio con brillo bajo. */
+    background-image:
+      radial-gradient(60rem 40rem at 50% -10%, theme('colors.tinta-alta') 0%, transparent 70%),
+      radial-gradient(40rem 30rem at 50% 110%, theme('colors.hierro') 0%, transparent 65%);
+    background-repeat: no-repeat;
+  }
+
+  /*
+   * Foco de teclado: doble anillo, el de `estetica-tourniquet.md` §4.
+   *
+   * El anillo de 2 px es `brasa` y el exterior de 1 px es `hueso`. El exterior
+   * existe porque `brasa` da 2.07:1 sobre `pergamino`: un solo anillo de `brasa`
+   * desaparece si el control queda sobre un fondo claro, y un foco que
+   * desaparece es SC 2.4.7 incumplido, que es un bloqueante de la
+   * certificacion.
+   *
+   * `:focus-visible` y no `:focus`: el foco por mouse no se dibuja, el de
+   * teclado si. Al reves seria un annoyance en cada clic, y el criterio de la
+   * fase pide foco visible, no foco siempre.
+   */
+  .foco-brasa:focus-visible {
+    outline: theme('outlineWidth.foco') solid theme('colors.brasa');
+    outline-offset: theme('outlineOffset.foco');
+    box-shadow: 0 0 0 3px theme('colors.hueso');
+    border-radius: theme('borderRadius.campo');
+  }
+
+  /* Un elemento con `overflow` propio no debe comerse el anillo de foco. */
+  .foco-brasa:focus-visible {
+    position: relative;
+    z-index: 1;
+  }
+}
+
+@layer utilities {
+  /*
+   * Filete de oxblood: el unico acento del tema que se usa como linea. Es
+   * decorativo (1.80:1) y por eso nunca es texto ni un borde que tenga que
+   * distinguir algo: separa, nada mas.
+   */
+  .filete-oxblood {
+    border-color: theme('colors.oxblood');
+  }
+
+  /* Textura de peltre muy fina para el plano del login. Dos gradientes
+     cruzados, sin imagen, sin request. La Fase 07 suma `malla` y `grano`; esta
+     es la version austera y ya alcanza para que el fondo no sea un bloque. */
+  .trama-peltre {
+    background-image:
+      linear-gradient(115deg, rgba(200, 204, 212, 0.022) 0%, transparent 42%),
+      linear-gradient(295deg, rgba(122, 15, 22, 0.05) 0%, transparent 38%);
+  }
+}

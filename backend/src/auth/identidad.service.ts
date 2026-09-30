@@ -40,9 +40,24 @@ export interface UsuarioSesion {
 
 export type MotivoFallo = 'credenciales' | 'bloqueado' | 'inactivo' | 'rate_limit';
 
+/**
+ * Fallo de `verificar`.
+ *
+ * `bloqueadoHasta` y `reintentoEnMs` son los dos datos que el portal necesita
+ * para **enseñar** algo: la hora local hasta la que se espera, y cuanto falta
+ * para reintentar. Van como dato estructurado, no dentro de `mensaje`, para
+ * que el front los formatee con la zona horaria del navegador en vez de
+ * adivinar un `HH:MM` impreso por el servidor.
+ */
 export type ResultadoVerificacion =
   | { ok: true; usuario: UsuarioSesion }
-  | { ok: false; motivo: MotivoFallo; mensaje: string };
+  | {
+      ok: false;
+      motivo: MotivoFallo;
+      mensaje: string;
+      bloqueadoHasta?: Date;
+      reintentoEnMs?: number;
+    };
 
 export interface DatosAdmin {
   usuario: string;
@@ -238,7 +253,12 @@ export class IdentidadService {
     ]);
     if (!cuota.permitido) {
       await this.auditar('error', null, 'rate_limit', ctx);
-      return { ok: false, motivo: 'rate_limit', mensaje: MENSAJE_RATE_LIMIT };
+      return {
+        ok: false,
+        motivo: 'rate_limit',
+        mensaje: MENSAJE_RATE_LIMIT,
+        reintentoEnMs: cuota.reintentoEnMs,
+      };
     }
 
     const fila = await this.prisma.idn_usuario.findUnique({
@@ -258,7 +278,12 @@ export class IdentidadService {
 
     if (fila.bloqueado_hasta && fila.bloqueado_hasta > ahora) {
       await this.auditar('bloq', fila.idusuario, 'usuario_bloqueado', ctx);
-      return { ok: false, motivo: 'bloqueado', mensaje: MENSAJE_BLOQUEADO };
+      return {
+        ok: false,
+        motivo: 'bloqueado',
+        mensaje: MENSAJE_BLOQUEADO,
+        bloqueadoHasta: fila.bloqueado_hasta,
+      };
     }
 
     if (fila.estado !== 'activo') {
@@ -271,14 +296,18 @@ export class IdentidadService {
     if (!correcta) {
       const intentos = fila.intentos_fallidos + 1;
       const seBloquea = intentos >= MAX_INTENTOS_FALLIDOS;
+      // Una sola fecha para el UPDATE y para la respuesta: si se calculara dos
+      // veces, el `bloqueado_hasta` que ve el usuario podria no ser el que
+      // quedo en la base, y "volve a intentar a las 15:31" seria mentira.
+      const bloqueadoHasta = seBloquea
+        ? new Date(ahora.getTime() + MINUTOS_BLOQUEO * 60_000)
+        : null;
 
       await this.prisma.idn_usuario.update({
         where: { idusuario: fila.idusuario },
         data: {
           intentos_fallidos: intentos,
-          bloqueado_hasta: seBloquea
-            ? new Date(ahora.getTime() + MINUTOS_BLOQUEO * 60_000)
-            : fila.bloqueado_hasta,
+          bloqueado_hasta: bloqueadoHasta ?? fila.bloqueado_hasta,
           actualizado_en: ahora,
         },
       });
@@ -291,7 +320,12 @@ export class IdentidadService {
       );
 
       return seBloquea
-        ? { ok: false, motivo: 'bloqueado', mensaje: MENSAJE_BLOQUEADO }
+        ? {
+            ok: false,
+            motivo: 'bloqueado',
+            mensaje: MENSAJE_BLOQUEADO,
+            bloqueadoHasta: bloqueadoHasta as Date,
+          }
         : { ok: false, motivo: 'credenciales', mensaje: MENSAJE_CREDENCIALES };
     }
 

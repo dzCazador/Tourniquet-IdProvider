@@ -98,30 +98,66 @@ lentes. Tres reglas que resuelven la tensión:
 
 ## 4. Tokens de color (con contraste medido, WCAG 2.2 AA)
 
+> **Corregido en la Fase 04.** La tabla de abajo estaba mal medida en tres
+> tokens: `sangre` figuraba en 5.9:1 cuando daba **3.63:1**, `verdigris` en 5.3:1
+> cuando daba **4.35:1** y `oxblood` en 2.1:1 cuando daba 1.80:1. Los tres
+> están recalculados con la fórmula de WCAG 2.2 (sRGB relativo) y los que
+> estaban mal se corrigieron. `sangre` importaba: es el color del texto de error
+> del login, y con el valor viejo **no pasaba AA para texto normal**, lo que
+> hubiera hecho fallar el criterio de axe-core de la Fase 04. La medición vive
+> en `frontend/src/design/tokens.ts`, que es la única fuente de verdad.
+
 | Token | Hex | Uso | Contraste sobre `tinta` |
 |---|---|---|---|
 | `tinta` | `#0a0a0c` | Fondo de página | — |
-| `tinta-alta` | `#121216` | Fondo de panel / campo | 1.3:1 (decorativo) |
-| `hierro` | `#1c1c22` | Bordes faibles, separadores | decorativo |
-| `plata` | `#c8ccd4` | **Borde de control, texto secundario fuerte** | 10.8:1 ✔ |
-| `hueso` | `#e8e2d6` | **Texto de cuerpo** | 14.6:1 ✔ |
-| `pergamino` | `#f2ede3` | Texto sobre `oxblood` | 9.1:1 ✔ |
-| `oxblood` | `#7a0f16` | Acento, encabezado de sección, sello | 2.1:1 (decorativo) |
-| `sangre` | `#c2343c` | **Error**: texto de error, borde de campo inválido | 5.9:1 ✔ |
-| `brasa` | `#c9a227` | Acento de estado, foco secundario, sello activo | 8.1:1 ✔ |
-| `verdigris` | `#4a8072` | Éxito, sesión activa | 5.3:1 ✔ |
+| `tinta-alta` | `#121216` | Fondo de panel / campo | 1.06:1 (decorativo) |
+| `hierro` | `#1c1c22` | Bordes faibles, separadores | 1.17:1 (decorativo) |
+| `plata` | `#c8ccd4` | **Borde de control, texto secundario fuerte** | 12.29:1 ✔ |
+| `hueso` | `#e8e2d6` | **Texto de cuerpo** | 15.34:1 ✔ |
+| `pergamino` | `#f2ede3` | Texto sobre `oxblood` | 16.95:1 ✔ |
+| `oxblood` | `#7a0f16` | Acento, encabezado de sección, sello | 1.80:1 (decorativo) |
+| `sangre` | `#d2565d` | **Error**: texto de error, mensaje de rol `alert` | 4.93:1 ✔ |
+| `sangre-honda` | `#c2343c` | Error: borde de campo inválido, ícono (sólo no-texto) | 3.63:1 ✔ (3:1) |
+| `brasa` | `#c9a227` | Acento de estado, foco, sello activo | 8.18:1 ✔ |
+| `verdigris` | `#569584` | Éxito, sesión activa | 5.68:1 ✔ |
 
 Reglas de aplicación:
 
-- El rojo de error es `#c2343c` (5.9:1), **no** `#7a0f16` (2.1:1, no alcanza). `oxblood` es
-  decorativo; `sangre` es funcional.
-- Nunca texto sobre `oxblood` en `#a1121c` (2.8:1). Sobre oxblood va `pergamino` (9.1:1) o `hueso`.
+- **El rojo de error tiene dos tonos, y cuál va dónde no es opcional.**
+  `sangre` (`#d2565d`, 4.93:1) es el del TEXTO: pasa AA para texto normal, que es
+  lo que exige WCAG 2.2 §1.4.3. `sangre-honda` (`#c2343c`, 3.63:1) es el del
+  BORDE y del ícono, que son elementos de interfaz y sólo necesitan 3:1
+  (§1.4.11). Poner `sangre-honda` en un texto de error es el defecto que la
+  tabla anterior tenía. `oxblood` (`#7a0f16`, 1.80:1) queda **excluido de
+  cualquier texto**: es decorativo, y sobre él va `pergamino` (9.44:1).
+- **`oxblood` no delimita ningún control.** Es el único token de la paleta por
+  debajo de 3:1, así que puede ser línea decorativa, filete, bisel o remache, y
+  nada más. El borde de un botón, de un campo o de un control de formulario va
+  en `plata` (o `plata/60`, que compone a 4.83:1 sobre `tinta-alta`): el fondo
+  del portal contra el de la página da 1.06:1, o sea que **el borde es lo único
+  que dibuja el control** y si el borde no se ve, el control no se ve. La Fase
+  04 lo tenía mal en el botón primario (`oxblood`, 1.70:1 sobre su propio
+  fondo) y lo corrigió moviendo la jerarquía de primario/secundario al
+  **relleno** y dejando el borde en `plata/60` en los dos.
+- Nunca texto sobre `oxblood` en `#a1121c` (2.8:1). Sobre oxblood va `pergamino` (9.44:1) o `hueso` (8.54:1).
+- `sangre` **no** se usa sobre `pergamino` (3.44:1): el error vive sobre
+  `tinta`/`tinta-alta`, nunca sobre un fondo claro.
 - El foco de teclado es `brasa` con `outline: 2px solid` + `outline-offset: 2px`, y un segundo anillo
-  `hueso` de 1 px por fuera: se ve sobre cualquier fondo, incluso sobre `pergamino`.
+  `hueso` de 1 px por fuera: se ve sobre cualquier fondo oscuro, incluso sobre
+  `pergamino` (2.07:1, que es justo por qué el anillo exterior va en `hueso` y
+  no en `brasa`: un solo anillo de `brasa` no se vería sobre un fondo claro).
 - Estados deshabilitados: `plata` al 40 % sobre `hierro` = 1.2:1, **sólo para texto decorativo**. Un
   control deshabilitado que trasmite información real (`opacity-50` sobre texto que hay que leer) es
   un defecto de accesibilidad, no una decisión estética.
 - No se usa `mix-blend-mode` para ganar legibilidad: `backdrop-filter` y gradientes sí.
+
+### Medir, no estimar
+
+Todo lo de arriba sale de `frontend/src/design/contraste.ts` (la fórmula de
+WCAG 2.2, con composición de alfa para los `plata/60`). Un token con alfa **no**
+se mide por su canal: `plata` mide 12.29:1 y pintado al 60 % sobre `tinta-alta`
+mide 4.83:1, que es lo que se ve en pantalla. La función compone antes de
+medir por eso.
 
 ---
 
@@ -161,6 +197,7 @@ totales, medidos con `ls -l frontend/src/design/ornaments`.
 | Vista | Tono | Detalle |
 |---|---|---|
 | `/login` | **Alto** | Plano de login como "placa en una pared": wordmark con anillo, campo de usuario, campo de clave, botón. Fondo `malla`+`grano`. Abajo, aviso sobrio de privacidad y ayuda. **Sin** eslogan, sin lirismo, sin tips de la canción |
+| `/login` · selector de cliente | **Medio** | Cuando el usuario es miembro de varios clientes, el botón de ingresar **desaparece** y aparece la lista de clientes como botones, con el `código` al lado del nombre. No es un campo más del formulario: es otra pregunta, y por eso los campos de usuario y clave **no** se ponen en rojo — la clave ya fue verificada. Mismo patrón de placa del lanzador de la 07, en versión chica |
 | `/consentimiento` (nuevo) | Alto en marco, sobrio en contenido | Título: "Aceptás el ingreso de **{app}**". Debajo, la **"rebanada"**: 3-4 renglones de hechos —qué es la app, qué recibe, quéNO recibe. Botón "Entrar". Acá la letra dice "you never believed in me": el portal muestra los hechos, no pide fe |
 | `/apps` (lanzador) | Medio-alto | Selector de cliente (si hay N), lista de apps en placas grabadas con su estado. Cada placa es un link de al authorize con deep-link |
 | `/apps/[codigo]` | Bajo | Pantalla de "puerta": cuenta regresiva de 5 s y botón "Entrar ahora" (evita el click-jacking trivial y da control). El token va a la cookie HttpOnly de la app |
@@ -206,7 +243,10 @@ Requisitos no negociables (si alguno falla, la vista no está lista):
 1. Lighthouse Accessibility ≥ 95 en `/login`, `/apps`, `/admin` (export estático, medido local).
 2. axe-core sin violaciones `critical` ni `serious` en las 6 vistas.
 3. Contraste AA verificado con herramienta en los pares de la tabla §4 (y en los estados
-   hover/focus/disabled de cada control).
+   hover/focus/disabled de cada control). **Medido con `design/contraste.ts`, que compone alfa antes de
+   comparar**: los bordes `plata/60` de los controles no se miden por el canal de `plata` (12.29:1)
+   sino por lo que se ve (4.83:1). El borde de un control nunca puede ser `oxblood`: el fondo del
+   portal contra el de la página da 1.06:1 y el borde es lo único que dibuja el control.
 4. Blackletter sólo en el wordmark: `grep -ri "unifraktur" frontend/src` devuelve sólo los 2
    archivos del logo y el favicon.
 5. Con `prefers-reduced-motion: reduce`, no hay ninguna animación en las 6 vistas.
@@ -225,25 +265,40 @@ Requisitos no negociables (si alguno falla, la vista no está lista):
 ```
 frontend/src/design/
 ├── tokens.ts             // colores, spacings, radios, sombras, duraciones (fuente única)
+├── contraste.ts          // fórmula WCAG 2.2 + los ratios medidos (traza de §4)
 ├── fonts.ts              // next/font: UnifrakturMaguntia, Cinzel, EB Garamond, Inter, JetBrains Mono
 ├── ornaments/
-│   ├── Anillo.tsx        // anillo de hierro (logo, badge)
-│   ├── Placa.tsx         // marco de placa grabada
-│   ├── Costura.tsx       // separador —✦—
-│   ├── Malla.tsx         // textura de red
-│   ├── Grano.tsx         // grano de película
-│   └── Sello.tsx         // sello de lacre
+│   ├── Anillo.tsx        // anillo de hierro (logo, badge)          [04]
+│   ├── Placa.tsx         // marco de placa grabada                 [04]
+│   ├── Costura.tsx       // separador —✦—                           [04]
+│   ├── Malla.tsx         // textura de red                         [07]
+│   ├── Grano.tsx         // grano de película                      [07]
+│   └── Sello.tsx         // sello de lacre                         [07]
 ├── components/
-│   ├── Boton.tsx         // primary/secondary/danger, tamaños, aria-busy
-│   ├── Campo.tsx         // input con label visible, error, hint, foco brasa
-│   ├── PlacaApp.tsx      // tarjeta de app en el lanzador
-│   └── Lamina.tsx        // lámina de 404/500
-└── motion.ts             // duraciones y curvas; respeta prefers-reduced-motion
+│   ├── Boton.tsx         // primary/secondary/danger, tamaños, aria-busy   [04]
+│   ├── Campo.tsx         // input con label visible, error, hint, foco brasa [04]
+│   ├── PlacaApp.tsx      // tarjeta de app en el lanzador          [07]
+│   └── Lamina.tsx        // lámina de 404/500                      [04]
+└── motion.ts             // duraciones y curvas; respeta prefers-reduced-motion [07]
 ```
 
 `tokens.ts` es la **única** fuente de valores: ningún componente escribe hex sueltos
 (`grep -rn "#[0-9a-f]\{6\}" frontend/src/app` no debe matchear; los hex sólo en `tokens.ts` y en los
 ornamentos).
+
+### Qué entra en la Fase 04 y qué en la 07
+
+La **04** pinta el login, que es la primera pantalla que un empleado real usa a
+las 3 de la mañana. El tema entra ahí, pero **sostenido por el marco y no por la
+función**: anillo en el wordmark, placa grabada como plano del formulario,
+filete `oxblood`, `Cinzel` en el título. Todo lo que el usuario tiene que leer o
+escribir —etiquetas, campos, botones, mensajes— va en `Inter` sobre `tinta-alta`,
+sin textura y sin tipografía decorativa (§2 regla 1).
+
+La **07** suma la superficie del lanzador: `malla`, `grano`, `sello` de lacre,
+`PlacaApp`, `motion.ts` y la animación del anillo. La 07 **pinta encima**: los
+tokens y los componentes base no cambian, y por eso el criterio de esta fase es
+que `/login` ya se lea bien sin ninguna de las texturas de la 07.
 
 ---
 
