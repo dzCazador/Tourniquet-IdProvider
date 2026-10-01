@@ -7,13 +7,17 @@
  * del concepto, dibujado sin una sola palabra de la cancion.
  *
  * Los colores van con utilidades de Tailwind (`stroke-plata`, `fill-oxblood`)
- * y no con `var(--color-...)`: las utilidades salen de `tokens.ts` igual que
- * cualquier otra clase, asi que el hex sigue estando en un solo archivo.
+ * y no con un `var()` escrito aca: las utilidades salen de `tokens.ts` igual que
+ * cualquier otra clase, asi que el hex sigue estando en un solo archivo. La
+ * excepcion es `oxblood`, que **si** es una variable (`--color-acento`) porque
+ * es el unico token que se sobreescribe por cliente (`estetica-tourniquet.md`
+ * §11) — y el mapeo esta en `tailwind.config.ts`, no en este componente.
  *
- * Es **decorativo**: sin `titulo` queda con `aria-hidden`, porque el nombre
- * "Tourniquet" ya esta en el texto visible del wordmark y un SVG sin nombre no
- * le aporta nada a un lector de pantalla. El borde de 1.5 px es el de los
- * iconos de la spec §3.
+ * Es **decorativo**: sin `titulo` queda con `aria-hidden`, porque el nombre de
+ * quien esta entrando ya esta en el texto visible del wordmark —que desde la
+ * Fase 10 es el del cliente, no el del producto— y un SVG sin nombre no le
+ * aporta nada a un lector de pantalla. El borde de 1.5 px es el de los iconos
+ * de la spec §3.
  */
 export function Anillo({
   className = '',

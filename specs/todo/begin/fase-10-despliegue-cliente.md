@@ -1,14 +1,46 @@
 # Fase 10 — Despliegue en un cliente: runbooks e instalación
 
-**Estado:** ⬜ Pendiente
+**Estado:** 🟡 **código y documentación cerrados; ejecución en la máquina del cliente pendiente**
 **Depende de:** [09](fase-09-endurecimiento.md) (o de la 07, si el cliente no pidió endurecimiento)
-**Repo:** ninguno (es documentación + scripts); el DDL de las bases de negocio lo ejecuta el
+**Repo:** Tourniquet (código + documentación); el DDL de las bases de negocio lo ejecuta el
 usuario
 **Requiere acción del usuario:** **sí** — es casi enteramente acción suya
 **Riesgo:** medio — un despliegue mal hecho deja al cliente sin login
 **Reversible:** sí, si el runbook de rollback existe (esa es la razón de la fase)
-**Spec normativo:** `specs/00-arquitectura.md` D3, `specs/02` §5, `estetica-tourniquet.md` §11
-**Mapa:** `specs/04-fases.md` Fase 04 (la parte que es del cliente)
+**Spec normativo:** `specs/00-arquitectura.md` D3, §4.3, §8.2; `specs/02` §5;
+`estetica-tourniquet.md` §11; `specs/04-fases.md` Fase 05
+**Mapa:** `specs/04-fases.md` Fase 05 (la parte que es del cliente)
+
+---
+
+## Qué se entregó de esta fase, y qué falta
+
+Entregado y verificado contra `tourniquet_dev`:
+
+| Tarea | Dónde | Verificación |
+|---|---|---|
+| `scripts/generar-instalacion.mjs` + `npm run generar:instalacion` | `scripts/`, `package.json` | Los seis caminos de error probados (issuer `http`, `redirect_uri` de otro origen, `tema` desconocido, acento que no es `#rrggbb`, código de cliente inválido, doble acentuación). El `.sql` generado se revisó línea por línea: **no se aplicó** contra ninguna base |
+| Cuatro runbooks de operación | `deploy/runbooks/{instalacion,backup-restore,rollback,emergencia}.md` | Revisión contra los doce pasos de esta fase y contra las trampas 1–6 |
+| Guía para el administrador de sistemas del cliente | `docs/instalacion.md` | — |
+| Guardas de arranque de producción | `backend/src/config/env.schema.ts` | Las cuatro reglas cortan el arranque; `DATABASE_URL` se redacta y el mensaje nombra el catálogo, no la URL |
+| `GET /marca` con `politica_json.tema` | `backend/src/marca/` | Los seis casos probados contra la base: austero con acento, acento en mayúsculas, **intento de inyección de CSS**, estética desconocida, `politica_json` sin `tema`, y `NULL`. Los tres que fallan avisan al log y caen al tema por defecto |
+| Acento por cliente + estética `austero` | `frontend/src/design/{tokens,marca}.tsx`, `tailwind.config.ts`, `globals.css` | Compilado y **mirado el CSS generado**: `:root{--color-acento:#7a0f16}`, los cinco `*-oxblood` salen de la variable, y `border-plata/60` **sigue compilando con su alfa** (23 usos) |
+| Nombre del cliente en el portal | `login`, `mfa`, `Marco` | El export estático prerenderiza el default (`Tourniquet`) y el nombre del cliente entra después de `/marca`. Verificado en el HTML generado |
+
+**Lo que falta, y no se puede hacer desde acá:**
+
+1. **La instalación en la máquina del cliente.** Es el criterio de aceptación principal y es
+   enteramente del usuario: los diez puntos de la prueba de humo, el reinicio automático del servicio tras
+   reiniciar la máquina, el restore probado.
+2. **El drill de rotación de claves** contra un `TQ_ISSUER` de cliente (agendado por la 09).
+3. **La medición de contraste de un `color_acento` que elija el cliente.** El backend valida el
+   formato, no el contraste: si un cliente pone un acento que rompe el botón primario, el portal
+   lo muestra igual. Hay que correr `auditarContraste()` y anotarlo. Está en la tabla de "con
+   limitación conocida" del `README.md`.
+4. **El pase de navegador** de la 07 y la 09, que esta fase no ejecutó.
+5. **La semilla de cliente aplicada a una base real.** El SQL generado no se corrió contra ninguna base:
+   no hay `sqlcmd` en la máquina de desarrollo, y aplicarlo sobre `tourniquet_dev` habría pisado
+   los `redirect_uri` de la app `rhpro` del despliegue de desarrollo.
 
 ---
 

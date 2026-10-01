@@ -399,3 +399,81 @@ del token en el §2 de esta spec: la variación de marca vive en los tokens, no 
   componentes no se tocan.
 - La austera tiene la misma estructura y los mismos contrastes: sólo cambia el acento a un azul
   neutro y la textura a 0 %. Nunca "sin tema".
+
+### 11.1 Cómo está implementado (Fase 10)
+
+Lo que §11 pide, y el mecanismo exacto. La regla del §10 —**un solo lugar con un color**— es lo que
+define la forma de la solución.
+
+**El acento es el único token que se sobreescribe en runtime.** Vive en la variable CSS
+`--color-acento`, y el mapeo de las clases de Tailwind a esa variable está declarado **a mano y
+explícito** en `frontend/tailwind.config.ts`:
+
+```ts
+const acento: Record<string, string> = { oxblood: `var(${VAR_ACENTO})` };
+```
+
+Un `map` automático sobre toda la paleta habría producido veinte variables, y no habría forma de
+saber después cuáles se pueden sobreescribir. La respuesta ("ninguna más, porque en veinte lugares
+hay modificadores de opacidad") tiene que quedar escrita en el código, y por eso el mapa es
+explícito.
+
+**Por qué el acento y no más.** Solo el acento cambia entre clientes. `tinta`, `hueso`, `sangre` y
+`brasa` están medidos y auditados como un conjunto (`paresContrastados` y `auditarContraste()`), y
+aceptar un color de fondo del cliente sería devolverle la garantía de contraste de su propia
+pantalla de ingreso. El acento es decorativo en los dos temas, y por eso es el único que se puede
+mover sin volver a medir nada.
+
+**Por qué no convertir toda la paleta en variables.** Un color declarado como `var(--x)` no admite
+el modificador de opacidad, porque Tailwind no puede parsearlo — y lo descarta **en silencio**,
+sin warning. `border-plata/60` aparece en 23 lugares del portal: convertir `plata` en variable los
+dejaría sin borde, con el build en verde. Es la misma trampa que ya está documentada en
+`contraste.ts` y en `.fondo-login`, y la razón por la que el alfa de los tokens vive en el token
+(`veloFondo`, `textura`).
+
+**El wordmark es el nombre del cliente, no el del producto.** §3 lo trata como "el único lugar con
+blackletter del producto"; desde la Fase 10 el `h1` de `/login`, el de `/mfa` y la línea del
+encabezado de `Marco` llevan el **nombre del cliente**, con "Tourniquet" en la línea de abajo, al
+lado de "Ingreso unico". Un IdP que le muestra "Tourniquet" a un empleado de otra empresa le está
+diciendo que está en el sistema equivocado justo cuando está tipeando su clave. Cuando
+`GET /marca` devuelve `cliente: null` (base sin un único cliente activo, o endpoint caído) el
+nombre es el del producto, y la pantalla anda igual.
+
+**La textura al 0 % son tres reglas CSS, no una condición de render.** Con
+`html[data-estetica='austero']`:
+
+| Qué | Dónde |
+|---|---|
+| `.trama-peltre` sin `background-image` | la placa del formulario |
+| `.fondo-login` sin la `url()` del raster (**el velo radial se queda**) | el fondo del ingreso |
+| `.ornamento-textura` en `display: none` | `Malla` + `Grano` del encabezado de `Marco` |
+
+El velo radial **no** se apaga y esa es la parte que hay que entender: es la garantía de contraste
+del wordmark (§1.1), y sin el raster el wordmark queda sobre `tinta` pelada, donde `hueso` da
+**15.34:1** — más que los 15.08:1 que da con la imagen. Quitar la textura sube el contraste.
+
+**El acento por defecto de la austera es `#41607e`, y es una decisión de contraste, no de gusto.**
+Medido con `contraste()` de este mismo repo, y anotado en `paresContrastados`:
+
+| Par | Ratio | Umbral |
+|---|---|---|
+| `pergamino` sobre el acento (el texto del botón primario) | **5.63:1** | 4.5 — AA. Es la restricción dura |
+| el acento sobre `tinta` | **3.01:1** | 3 — SC 1.4.11 |
+| `hueso` sobre `tinta` (fondo sin textura) | **15.34:1** | 14 — §2 regla 1 |
+
+El acento gótico da 1.80:1 sobre `tinta` y por eso está declarado decorativo y nunca es texto. El
+austero llega al umbral de 1.4.11 sin tener que arrastrar esa salvedad, y es el azul más apagado
+que todavía deja el botón principal en AA. Un azul más saturado rompe el texto del botón de **todos
+los clientes austeros** a la vez.
+
+**Un `color_acento` del cliente se acepta sin re-medir, y esa es la decisión consciente.** El
+backend valida el formato (`#rrggbb`) y descarta cualquier otra cosa, pero un color elegido por el
+cliente **no está medido**. Está en la lista de "lo que no se implementó" del `README.md`: si un
+cliente elige un acento que rompe el contraste del botón, el portal lo muestra igual, y lo que hay
+que hacer es medirlo con `auditarContraste()` y anotarlo, como se hizo con los dos valores de acá.
+La alternativa —rechazar acentos que no sepamos medir en runtime— sería que el cliente no
+pudiera elegir su color, que es lo que §11 promete.
+
+**Lo que §11 NO abre con la Fase 10**, y sigue sin abrirse: cambiar la tipografía, cambiar la
+estructura de una pantalla, o subir la densidad de un tema. La variación de marca vive en los tokens;
+una estética nueva es una estética, y las estéticas nuevas no se prometen en el §11.

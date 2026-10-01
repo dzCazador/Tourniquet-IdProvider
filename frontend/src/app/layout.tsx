@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
 import { clasesDeFuente } from '@/design/fonts';
+import { ProveedorMarca } from '@/design/marca';
+import { PRODUCTO } from '@/lib/marca';
 import { color } from '@/design/tokens';
 import './globals.css';
 
@@ -21,8 +23,8 @@ export const dynamic = 'force-static';
 
 export const metadata: Metadata = {
   title: {
-    default: 'Tourniquet',
-    template: '%s · Tourniquet',
+    default: PRODUCTO,
+    template: `%s · ${PRODUCTO}`,
   },
   description: 'Ingreso unico a las aplicaciones de la organizacion.',
   robots: {
@@ -43,6 +45,11 @@ export const metadata: Metadata = {
  * `themeColor` va en `viewport` y no en `metadata` porque Next 14 lo rechaza
  * en `metadata` (avisa en cada build) y lo usa para pintar las barras del
  * navegador en Android: sin el, hay un destello blanco en cada navegacion.
+ *
+ * El `title` de arriba tampoco puede llevar el nombre del cliente, y por lo
+ * mismo: el build es estatico y este HTML se escribe una vez, en la maquina que
+ * compila. Lo que si se puede es corregirlo despues en el navegador, que es lo
+ * que hace `ProveedorMarca`.
  */
 export const viewport: Viewport = {
   width: 'device-width',
@@ -53,7 +60,15 @@ export const viewport: Viewport = {
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="es" className={clasesDeFuente}>
-      <body className="min-h-screen bg-tinta text-hueso antialiased">{children}</body>
+      <body className="min-h-screen bg-tinta text-hueso antialiased">
+        {/*
+          El proveedor va aca y no en cada pantalla: la marca y el tema son de la
+          INSTALACION, no de la vista, y ademas hay que aplicarlos al `<html>`,
+          que es el elemento del que heredan las variables CSS. Ver
+          `design/marca.tsx`.
+        */}
+        <ProveedorMarca>{children}</ProveedorMarca>
+      </body>
     </html>
   );
 }

@@ -69,6 +69,7 @@ reglas: idempotencia, numeración, qué no va en un `.sql`.
 | `02-sesion-motivo-cierre-admin.sql` | Los cinco motivos de cierre que elige una persona (Fase 08) | Agente (sólo dev) o usuario |
 | `03-mfa-segundo-factor.sql` | `idn_usuario_mfa_codigo`, `tok_mfa_challenge` y `mfa_ultimo_periodo` (Fase 09) | Agente (sólo dev) o usuario |
 | `90-semilla-catalogo.sql` | Catálogo: apps, clientes, vínculos e inventario de bases (4 de RHPro). Sin usuarios, sin credenciales | Agente (sólo dev) o usuario |
+| `91-semilla-<cliente>.sql` | **Semilla de UNA instalación de cliente.** La genera `npm run generar:instalacion`, con los dominios reales y el tema elegido | **El usuario**, en la máquina del cliente |
 | `95-job-codigos.sql` … `98-job-sesiones.sql` | Los cuatro jobs de limpieza y retención (Fase 09). **Se agendan, no se corren a mano** | **Agendados por el usuario** (SQL Agent o Planificador de tareas) |
 | `99-verificar-esquema.sql` | Imprime la huella del esquema para comparar los caminos (A) y (B) | Cualquiera (es de sólo lectura) |
 
@@ -196,18 +197,44 @@ centinela `sin_registrar`. El centinela es una decisión de esquema, no un atajo
 es que **el código tiene que comparar contra `sin_registrar` antes de armar una conexión**; un
 string de conexión armado con ese valor falla con "login failed", que no dice "no lo
 registraste". El inventario de la sección 6 de la semilla lo marca como `PENDIENTE`.
-
 **En una instalación de cliente no se usa ese archivo**: se genera uno propio con
 
 ```bash
-node scripts/generar-instalacion.mjs     # pregunta codigo, dominios, base y tema
+npm run generar:instalacion     # pregunta codigo, dominios, base y tema
 ```
 
 que escribe un `91-semilla-<cliente>.sql` con los dominios reales.
 
-Un `localhost` que queda en `cat_aplicacion.redirect_uris_json` de una instalación real es un
-`redirect_uri` válido **para siempre**: alguien que corra un IdP en su máquina podría canjear
-codes (`specs/01` §9). Es la trampa 5 de la Fase 10 y la primera que se revisa en la instalación.
+Un `localhost` que queda en `cat_aplicacion.redirect_uris_json` de una instalación
+real es un `redirect_uri` válido **para siempre**: alguien que corra un IdP en su
+máquina podría canjear codes (`specs/01` §9). Es la trampa 5 de la Fase 10 y la
+primera que se revisa en la instalación.
+
+### El `91-` es por cliente, y eso no es una excepción a la numeración
+
+D3 de `specs/00` es **una instancia por cliente**: donde va Chile sólo hay base de
+Chile. Cada instalación tiene entonces **su propio** `91-semilla-<cliente>.sql`, y
+van a **bases distintas**. No es un número retirado usado dos veces: es el mismo
+número de un rango (`90-` … `94-` es el de las semillas) aplicado a archivos que
+nunca se aplican a la misma base.
+
+Lo que **no** puede pasar es aplicarle dos `91-` distintos a la misma base: el
+script es idempotente, no acumulativo, así que el segundo pisa al primero en
+silencio. `generar-instalacion.mjs` avisa si ya hay otros `91-` en el directorio, y
+el archivo generado lo dice en el encabezado.
+
+### Qué escribe el generador y qué no
+
+`generar-instalacion.mjs` **no abre conexión a ninguna base** y **no necesita
+`TQ_MASTER_KEY`**: escribe un archivo y nada más. Con eso se garantiza que es el
+único camino por el que se crea un `.sql` nuevo, así que el número, el encabezado y
+la lista de lo que no va adentro quedan por construcción y no por buena memoria.
+
+Además valida antes de escribir, y corta con el motivo: `TQ_ISSUER` en `https`, el
+`redirect_uri` bajo el origen de la app, el `tema` en la lista cerrada de
+`estetica-tourniquet.md` §11, y el acento en `#rrggbb`. Un `redirect_uri` de otro
+origen es exactamente lo que un atacante necesita (`specs/01` §9), y no es un valor
+que deba entrar a una instalación "y después se ve".
 
 ---
 
@@ -330,9 +357,13 @@ job de retención que se corre una vez a mano es un job que se olvidó.
 |---|---|---|
 | `jobs-limpieza.md` | Los cuatro jobs de retención: qué corre, con qué frecuencia, y **cómo agendarlos en SQL Agent o en el Planificador de tareas** (SQL Server Express) | ✅ Fase 09 |
 | `rotacion-claves.md` | Rotación de claves de firma: los 5 pasos, la verificación y el rollback | ✅ Fase 09 |
-| `instalacion.md` | De cero a login funcionando, con el orden exacto de los `.sql` | Fase 10 |
-| `backup-restore.md` | Backup de la base y de la master key **por separado**, y restore probado | Fase 10 |
-| `rollback.md` | Cómo deshacer cada paso de la instalación | Fase 10 |
+| `instalacion.md` | De cero a login funcionando: servicio, `.env`, esquema, semilla del cliente, credencial cifrada, primer admin, portal, **prueba de humo de 10 puntos** | ✅ Fase 10 |
+| `backup-restore.md` | Backup de la base y de la master key **por separado**, y restore **probado** | ✅ Fase 10 |
+| `rollback.md` | Cómo deshacer cada paso de la instalación, con `AUTH_MODO=local` como red de seguridad | ✅ Fase 10 |
+| `emergencia.md` | Cómo entra la gente si Tourniquet está caído, quién tiene las credenciales y bajo qué condiciones se usan | ✅ Fase 10 |
+
+Y la versión corta, **para el administrador de sistemas del cliente** y no para un
+desarrollador, es **`docs/instalacion.md`**.
 
 El detalle importante de los backups: la base se respalda, la master key **no viaja con ella**
 (`TQ_MASTER_KEY` vive en el gestor de secretos del cliente). Si se pierde, no hay restore

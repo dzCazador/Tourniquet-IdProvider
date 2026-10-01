@@ -25,6 +25,20 @@ import { decodificarMasterKey } from '../claves/crypto';
 export const VARIABLES_SENSIBLES = ['TQ_MASTER_KEY', 'DATABASE_URL', 'TQ_BOOTSTRAP_CLAVE'] as const;
 
 /**
+ * Catalogo de la base de DESARROLLO. Aparece acá y en
+ * `scripts/ejecutar-sql-dev.mjs`, y en los dos lugares es una guarda, no un
+ * default: es el unico nombre que separa la base donde se trabaja de la base de
+ * un cliente (`specs/00` §8.1, regla 3 de `AGENTS.md`).
+ */
+export const BASE_DE_DESARROLLO = 'tourniquet_dev';
+
+/** El catalogo que declara `DATABASE_URL`, o `null` si la URL no lo trae. */
+export function catalogoDe(url: string): string | null {
+  return /database=([^;]+)/i.exec(url)?.[1] ?? null;
+}
+
+
+/**
  * `TQ_MASTER_KEY` se valida llamando a `decodificarMasterKey`, la MISMA función
  * que usa `MasterKeyService` al descifrar. Es deliberado:
  *
@@ -67,7 +81,50 @@ export const ESQUEMA_ENTORNO = Joi.object({
 
   DATABASE_URL: Joi.string()
     .required()
+    .custom((valor, helpers) => {
+      // Barrido de la guardia de `fase-10` §2: con `NODE_ENV=production` apuntando
+      // a `tourniquet_dev`, el despliegue "funciona" y lo que en realidad paso es
+      // que se arranco el IdP de un cliente contra la base donde se desarrolla.
+      // El sintoma -- apps que rechazan tokens, usuarios que no aparecen -- no
+      // dice nada de la base, asi que esta falla antes, con el nombre del
+      // catalogo a la vista.
+      //
+      // El nombre del catalogo no es un secreto (`scripts/lib/consola.mjs` ya lo
+      // imprime en los fallos de conexion) y el mensaje **no** incluye la URL.
+      const catalogo = catalogoDe(String(valor));
+      if (process.env.NODE_ENV === 'production' && catalogo === BASE_DE_DESARROLLO) {
+        return helpers.error('any.invalid', {
+          message:
+            `en produccion DATABASE_URL no puede apuntar a "${BASE_DE_DESARROLLO}" ` +
+            '(es la base de desarrollo). O se copio el .env de la maquina de ' +
+            'desarrollo, o falta cambiar el catalogo.',
+        });
+      }
+      return valor;
+    })
+    .messages({ 'any.invalid': '{{#message}}' })
     .description('Cadena de conexion a la base de control. La lee Prisma.'),
+
+  // No es una variable que el backend lea. Se declara unicamente para poder
+  // **rechazarla** en produccion: un `DEBUG=*` que alguien dejo puesto para ver
+  // que pasaba la ultima vez que se instalo es un parametro que no deberia
+  // viajar a produccion. Con `.unknown(true)` mas abajo, sin esta regla pasaria
+  // inadvertida.
+  DEBUG: Joi.string()
+    .allow('')
+    .optional()
+    .custom((valor, helpers) => {
+      if (process.env.NODE_ENV === 'production' && String(valor).trim().length > 0) {
+        return helpers.error('any.invalid', {
+          message:
+            'DEBUG no puede quedar definida en produccion. Si se puso para ' +
+            'diagnosticar, se saca antes de entregar la instalacion.',
+        });
+      }
+      return valor;
+    })
+    .messages({ 'any.invalid': '{{#message}}' })
+    .description('Prohibida en produccion. El backend no la lee; existe para poder rechazarla.'),
 
   TQ_ISSUER: Joi.string()
     .uri({ scheme: ['http', 'https'] })

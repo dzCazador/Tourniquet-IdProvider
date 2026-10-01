@@ -7,6 +7,7 @@ import { Campo } from '@/design/components/Campo';
 import { Anillo } from '@/design/ornaments/Anillo';
 import { Costura } from '@/design/ornaments/Costura';
 import { Placa } from '@/design/ornaments/Placa';
+import { useMarca } from '@/design/marca';
 import {
   API_URL,
   ErrorPortal,
@@ -14,6 +15,7 @@ import {
   type CodigoPortal,
   type ResultadoLogin,
 } from '@/lib/api';
+import { PRODUCTO } from '@/lib/marca';
 
 /**
  * `/mfa`: el segundo paso del login con segundo factor (`specs/01` §8.2).
@@ -297,13 +299,22 @@ function textoDeError(error: { codigo: CodigoPortal; datos: { intentos_restantes
   return 'No pudimos completar la operacion. Reintenta en un momento.';
 }
 
-/** El anillo y el wordmark: el mismo encabezado que el login, mas chico. */
+/**
+ * El anillo y el wordmark: el mismo encabezado que el login, mas chico.
+ *
+ * El wordmark es el **nombre del cliente**, por el mismo motivo que en `/login`
+ * (`estetica-tourniquet.md` §11): el segundo paso es la pantalla donde el
+ * empleado esta a un campo de escribir su clave, y es la peor pantalla para
+ * mostrarle el nombre de otro producto.
+ */
 function Encabezado() {
+  const { nombre } = useMarca();
+
   return (
     <div className="mb-6 flex flex-col items-center text-center">
       <Anillo className="text-hierro" diametro={56} />
-      <p className="mt-3 font-wordmark text-2xl tracking-wide text-hueso">Tourniquet</p>
-      <p className="mt-1 font-interfaz text-chico text-plata">Segundo paso</p>
+      <p className="mt-3 break-words font-wordmark text-2xl tracking-wide text-hueso">{nombre}</p>
+      <p className="mt-1 font-interfaz text-chico text-plata">{PRODUCTO} · Segundo paso</p>
     </div>
   );
 }

@@ -30,7 +30,7 @@ marcado `[browser]` en los criterios de la fase.
 | [07](fase-07-portal-lanzador.md) | Portal lanzador: membresías y lista de apps | Tourniquet | **Sí** (`01-aplicacion-url-inicio.sql`) | ✅ Código cerrado y verificado por HTTP (46 + 186 comprobaciones); queda el pase de navegador |
 | [08](fase-08-admin-identidad.md) | Panel `admin_identidad` por cliente | Tourniquet | **Sí** (`02-sesion-motivo-cierre-admin.sql`) | ✅ Código cerrado y verificado por HTTP (41 comprobaciones); queda el pase de navegador |
 | [09](fase-09-endurecimiento.md) | Endurecimiento: MFA, rotación, jobs, export de registro | Tourniquet | **Sí** (`03-`, jobs `95-` a `98-`) | ✅ Código cerrado y verificado (RFC 6238 + 135 comprobaciones por HTTP); falta el pase de navegador y el **drill de rotación real** contra un `TQ_ISSUER` de cliente |
-| [10](fase-10-despliegue-cliente.md) | Despliegue en un cliente: runbooks e instalación | — | **Sí** | ⬜ Pendiente |
+| [10](fase-10-despliegue-cliente.md) | Despliegue en un cliente: runbooks e instalación | Tourniquet | **Sí** (`91-semilla-<cliente>.sql`) | 🟡 **Código y documentación cerrados**; falta la ejecución en la máquina del cliente, que es la mayor parte de los criterios |
 | [11](fase-11-cierre-fase-01.md) | Cierre de la Fase 01 de `specs/04` | — | No | ⬜ Pendiente |
 
 **Lo único que quedó sin verificar de la 04** es la burbuja del gestor de
@@ -47,7 +47,8 @@ límite de esa línea están en "Decisiones que tomó esta fase", en el archivo 
 
 | Documento | Trata de |
 |---|---|
-| [estetica-tourniquet.md](estetica-tourniquet.md) | Sistema de diseño del portal: estética gótica (negro, oxblood, placa grabada, tipografía de placa) inspirada en la canción *Tourniquet* de Marilyn Manson, con la letra como guía de tono. Define tokens de color con contraste medido, 5 tipografías OFL, ornamentos SVG propios, movimiento y los requisitos de accesibilidad que corren por encima del tema. **Normativo desde la [Fase 07](fase-07-portal-lanzador.md)** |
+| [estetica-tourniquet.md](estetica-tourniquet.md) | Sistema de diseño del portal: estética gótica (negro, oxblood, placa grabada, tipografía de placa) inspirada en la canción *Tourniquet* de Marilyn Manson, con la letra como guía de tono. Define tokens de color con contraste medido, 5 tipografías OFL, ornamentos SVG propios, movimiento y los requisitos de accesibilidad que corren por encima del tema. **Normativo desde la [Fase 07](fase-07-portal-lanzador.md)**. §11 tiene la implementación de la marca por cliente (Fase 10) |
+| [`docs/instalacion.md`](../../docs/instalacion.md) | Guía de instalación **para el administrador de sistemas del cliente**, no para un desarrollador. Complementa a los runbooks, no los reemplaza |
 
 ### Trazabilidad con `specs/04-fases.md`
 

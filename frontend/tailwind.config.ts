@@ -1,5 +1,8 @@
 import type { Config } from 'tailwindcss';
-import { color, espacio, foco, radio, veloFondo } from './src/design/tokens';
+// `PluginCreator` no se puede pedir a `tailwindcss` porque su `index.d.ts` es un
+// `export =` de la funcion `plugin`: los tipos viven en `types/config`.
+import type { PluginCreator } from 'tailwindcss/types/config';
+import { VAR_ACENTO, color, espacio, foco, radio, raizCss, textura, veloFondo } from './src/design/tokens';
 
 /**
  * Tailwind no repite ningun valor: todo sale de `src/design/tokens.ts`.
@@ -15,6 +18,38 @@ import { color, espacio, foco, radio, veloFondo } from './src/design/tokens';
  * problema; el problema seria inventar `text-${nombre}` y confiar en que
  * Tailwind lo vea en el codigo, que no lo ve.
  */
+
+/**
+ * El unico color de la paleta que **no** es un hex sino una variable CSS: el
+ * acento, que es por cliente (`cat_cliente.politica_json.tema`, `estetica-
+ * tourniquet.md` §11).
+ *
+ * Va declarado en un solo lugar y a mano, no con un `map` sobre `color`, por una
+ * razon que conviene que quede escrita: el mapeo tiene que ser **explicito** para
+ * que se vea que es el unico. Si fuera `Object.fromEntries(Object.keys(color).map(...))`
+ * el dia de manana habria veinte variables y nadie sabria cuales se pueden
+ * sobreescribir en runtime — y la respuesta ("ninguna, porque en twenty
+ * lugares hay `/NN`") se pierde.
+ *
+ * El costo de que sea una variable esta medido: ninguna clase del acento usa
+ * modificador de opacidad. `border-plata/60` (23 usos) si lo usa, y por eso
+ * `plata` sigue siendo un hex.
+ */
+const acento: Record<string, string> = { oxblood: `var(${VAR_ACENTO})` };
+
+/**
+ * Emite el `:root` con el valor por defecto del acento.
+ *
+ * Va como plugin y no escrito en `globals.css` porque `globals.css` no puede
+ * importar un `.ts`: si el hex del default viviera en la hoja de estilos, el
+ * unico lugar con un color pasaria a ser dos.
+ */
+function acentoPorDefecto(): PluginCreator {
+  return ({ addBase }) => {
+    addBase({ ':root': raizCss });
+  };
+}
+
 const config: Config = {
   content: ['./src/**/*.{ts,tsx}'],
   theme: {
@@ -24,8 +59,12 @@ const config: Config = {
      * paleta: `theme('colors.velo.centro')` en la hoja de estilos, `bg-velo-
      * centro` en el JSX. Se REGISTERAN con el alfa ya puesto porque `theme()`
      * no sabe inyectarlo (ver `rgba()` en `contraste.ts`).
+     *
+     * `textura` es lo mismo para la trama de peltre, y existe como grupo
+     * aparte para que la estetica austera pueda apagarla sin tocar los colores
+     * que llevan el 4 % de plata.
      */
-    colors: { ...color, velo: { ...veloFondo } },
+    colors: { ...color, ...acento, velo: { ...veloFondo }, textura: { ...textura } },
     extend: {
       spacing: espacio,
       borderRadius: {
@@ -56,7 +95,7 @@ const config: Config = {
       outlineOffset: { foco: foco.desplazamiento },
     },
   },
-  plugins: [],
+  plugins: [acentoPorDefecto()],
 };
 
 export default config;

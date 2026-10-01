@@ -19,6 +19,7 @@ import { AuthModule } from './auth/auth.module';
 import { OidcModule } from './oidc/oidc.module';
 import { RegistroModule } from './registro/registro.module';
 import { RegistroApiModule } from './registro-api/registro-api.module';
+import { MarcaModule } from './marca/marca.module';
 
 @Module({
   imports: [
@@ -53,6 +54,10 @@ import { RegistroApiModule } from './registro-api/registro-api.module';
     PrismaModule,
     OidcModule,
     RegistroModule,
+    // `GET /marca`: nombre y tema del cliente, publico y de solo lectura
+    // (`fase-10`). Es lo unico que se puede pedir sin sesion y por eso va
+    // declarado aparte, con su modulo propio.
+    MarcaModule,
     // Panel `admin_identidad` (Fase 08). Va aparte de `RegistroModule` porque es
     // de escritura y de alcance por tenant: ver el comentario del modulo.
     RegistroApiModule,

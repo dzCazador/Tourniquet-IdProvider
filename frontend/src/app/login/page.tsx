@@ -7,6 +7,7 @@ import { Campo } from '@/design/components/Campo';
 import { Anillo } from '@/design/ornaments/Anillo';
 import { Costura } from '@/design/ornaments/Costura';
 import { Placa } from '@/design/ornaments/Placa';
+import { useMarca } from '@/design/marca';
 import {
   API_URL,
   ErrorPortal,
@@ -16,6 +17,7 @@ import {
   type CodigoPortal,
   type ResumenCliente,
 } from '@/lib/api';
+import { PRODUCTO } from '@/lib/marca';
 
 /**
  * `/login`: la pantalla de clave.
@@ -506,19 +508,30 @@ export default function PaginaLogin() {
  * turno de RRHH tiene 768. El subtitulo, ademas, se oculta solo en pantallas
  * bajas: es texto de apoyo y la primera cosa que se puede caer sin que se pierda
  * nada.
+ *
+ * **El wordmark es el nombre del cliente, no el del producto**
+ * (`estetica-tourniquet.md` §11). Un IdP que le muestra "Tourniquet" a un
+ * empleado de Cerveceria Cervi le esta diciendo que esta en el sistema equivocado
+ * en el momento en que esta tipeando su clave. El nombre del producto baja a la
+ * linea de abajo, al lado de "Ingreso unico", donde tiene que ir: es la firma, no
+ * el letrero. Y cuando `GET /marca` todavia no respondio —o no responde, porque
+ * una base sin un unico cliente activo devuelve `cliente: null`— el nombre es el
+ * del producto, y la pantalla anda igual.
  */
 function Encabezado() {
+  const { nombre } = useMarca();
+
   return (
     <div className="mb-6 flex flex-col items-center text-center">
+      {/* El anillo va sin nombre y con `aria-hidden`: es decorativo, y el texto
+          visible de abajo —el `h1`— ya dice que portal es. Un SVG sin nombre al
+          lado de un nombre escrito no le aporta nada a un lector de pantalla. */}
       <Anillo className="text-hierro" diametro={64} />
-      {/* El wordmark es el unico lugar con blackletter del producto, y
-          "Tourniquet" visible es lo que lo anuncia: el SVG de arriba va
-          con `aria-hidden` para que no se lea dos veces. */}
-      <h1 className="mt-4 font-wordmark text-3xl tracking-wide text-hueso sm:text-4xl">
-        Tourniquet
+      <h1 className="mt-4 break-words font-wordmark text-3xl tracking-wide text-hueso sm:text-4xl">
+        {nombre}
       </h1>
       <p className="mt-1 font-interfaz text-chico text-plata [@media(max-height:820px)]:hidden">
-        Ingreso unico
+        {PRODUCTO} · Ingreso unico
       </p>
     </div>
   );

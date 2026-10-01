@@ -115,6 +115,42 @@ TenantRegistry de RHPro se ejecute, ese mecanismo se diseña con su propio spec,
 sea out-of-band: un archivo, el gestor de secretos del cliente, o un cliente de servicio a
 servicio. Queda anotado como pendiente, no como supuesto.
 
+### 4.3 `GET /marca`: el único endpoint público que no es de OIDC (Fase 10)
+
+Devuelve **cómo se llama el cliente y con qué tema se pinta el portal**, y nada más:
+
+| Campo | Qué es |
+|---|---|
+| `cliente` | `cat_cliente.nombre`, o `null` |
+| `tema.estetica` | `gothic` o `austero` |
+| `tema.color_acento` | `#rrggbb` crudo de `politica_json.tema`, o `null` |
+| `acento` | El acento **resuelto**: el declarado si es válido, si no el de la estetica |
+
+Existe porque la pantalla de ingreso es lo primero que ve alguien que **nunca se ha logueado**, y
+ahí no hay sesión de la que sacar el nombre del cliente. Tiene su propio módulo (`marca/`) y no
+vive en `registro/` porque todo lo de `registro/` es de lectura con sesión.
+
+Las reglas que lo gobiernan, y son las que lo hacen aceptable siendo público:
+
+1. **No devuelve el `codigo` del cliente, ni la lista de clientes.** Un endpoint público que
+   devuelve el catálogo de tenants de una instalación es un directorio publicado sin autenticación.
+   Toma `take: 2` y, si hay **exactamente un** cliente activo, ese es; con cero o con dos o más,
+   devuelve `cliente: null` y avisa al log. **Preferir no mostrar ninguno antes que el de uno de
+   los dos**: una instancia con dos clientes activos es una instalación mal hecha (D3 es una
+   instancia por cliente), y publicar el nombre de uno a quien mira la pantalla del otro es peor
+   que no publicar ninguno.
+2. **Lo que el portal muestra *después* del ingreso no sale de acá.** Sale de `/me`, con el
+   `tenant` leído del token validado (invariante de `AGENTS.md`).
+3. **`color_acento` se valida contra `/^#[0-9a-f]{6}$/i` y se normaliza a minúsculas.** El valor
+   viene del contenido de una columna que escribe una persona con un `.sql` — es entrada de
+   usuario — y termina en una variable CSS que el navegador aplica a toda la página. Un valor con
+   `;`, `}` o `url(...)` no es "un color raro": es CSS arbitrario inyectado en el IdP de una
+   empresa. Un JSON mal formado o una estética desconocida **no rompen nada**: avisan al log y
+   cae al tema por defecto, porque dejar al cliente sin pantalla de ingreso es peor que dejarle
+   la del producto.
+4. **Sin caché.** Es una lectura indexada de una tabla de una fila, y un TTL acá significaría que
+   un cambio de tema tarda en verse.
+
 ## 5. Modelo de confianza
 
 - Tourniquet **no** accede a las bases de negocio de las apps. Registra sus datos de conexión
@@ -215,6 +251,28 @@ descifrar.
 **Variables desconocidas se permiten** (`allowUnknown: true`). El proceso puede correr junto a
 variables de otros servicios, y frenar el arranque por eso sería un falso positivo. El typo que
 de verdad importa —el de una variable `required()`— ya lo caza el `required()`.
+
+### 8.2 Las guardas de producción
+
+Un esquema que valida el *formato* de una variable no alcanza en un despliegue real: hay cuatro
+errores que no son de formato y que **tienen** que cortar el arranque, porque cada uno produce
+un síntoma que no apunta a la causa. Las cuatro viven en el mismo esquema, como `custom()` sobre
+`NODE_ENV === 'production'`, y cada una dice qué corregir:
+
+| Regla | Por qué no alcanza con revisarla a mano |
+|---|---|
+| `TQ_ISSUER` en `https` | El discovery de un issuer en `http` no valida, el token viaja en claro y el navegador bloquea las respuestas con credenciales. El síntoma es "las apps dan 401" |
+| `TQ_MASTER_KEY` con 32 bytes base64 exactos | Sin ella el proceso levanta y falla recién cuando alguien firma el primer token, en producción y con gente esperando |
+| `DATABASE_URL` **sin** `database=tourniquet_dev` | Con `NODE_ENV=production` apuntando a la base de desarrollo, el despliegue "funciona" y lo que pasó es que se arrancó el IdP de un cliente contra la base donde se desarrolla. El síntoma es "los usuarios no aparecen" |
+| `DEBUG` **no** definida | No la lee el backend. Se declara en el esquema unicamente para poder rechazarla: con `allowUnknown: true`, sin esta regla un `DEBUG` de una sesión de diagnóstico se cuela en producción sin que nadie lo note |
+
+Esta última es la razón de por qué una variable que el código **no** usa puede estar en el
+esquema: `allowUnknown: true` convierte "no la leo" en "no me entero". Declararla es la forma de
+que el esquema la pueda rechazar.
+
+`DATABASE_URL` es sensible y está redactada, así que el mensaje de la tercera guarda nombra el
+**catálogo** (que no es secreto) y **no** la cadena de conexión. Es la misma decisión que
+`scripts/lib/consola.mjs`.
 
 ### 8.1 Dónde vive el `.env`
 

@@ -91,11 +91,16 @@
 
   /* Textura de peltre muy fina para el plano del login. Dos gradientes
      cruzados, sin imagen, sin request. La Fase 07 suma `malla` y `grano`; esta
-     es la version austera y ya alcanza para que el fondo no sea un bloque. */
+     es la version austera y ya alcanza para que el fondo no sea un bloque.
+
+     Los dos valores salen de `theme('colors.textura.*')` y no de
+     `theme('colors.plata/2.2')` por el motivo de siempre: `theme()` descarta el
+     modificador de opacidad en silencio. Antes estanaban escritos aca como
+     `rgba()` a mano, que es un segundo lugar con un color. */
   .trama-peltre {
     background-image:
-      linear-gradient(115deg, rgba(200, 204, 212, 0.022) 0%, transparent 42%),
-      linear-gradient(295deg, rgba(122, 15, 22, 0.05) 0%, transparent 38%);
+      linear-gradient(115deg, theme('colors.textura.plata') 0%, transparent 42%),
+      linear-gradient(295deg, theme('colors.textura.acento') 0%, transparent 38%);
   }
 
   /**
@@ -193,6 +198,63 @@
     background-position: center;
     background-repeat: no-repeat;
   }
+}
+
+/*
+ * -----------------------------------------------------------------------------
+ * Estetica `austero` (`estetica-tourniquet.md` §11)
+ * -----------------------------------------------------------------------------
+ *
+ * §11 pide, textual: *"La austera tiene la misma estructura y los mismos
+ * contrastes: sólo cambia el acento a un azul neutro y la textura a 0 %."*
+ *
+ * "La misma estructura" es lo que hace que esto no sea un tema nuevo: **no se
+ * toca ningun componente**. Cambian tres cosas y las tres estan aca:
+ *
+ *   1. el acento, que ya no lo decide este archivo sino `--color-acento`, la
+ *      variable que `GET /marca` sobreescribe en runtime;
+ *   2. la textura de las placas (`.trama-peltre`);
+ *   3. la textura del fondo (`.fondo-login` y los ornamentos de `Marco`).
+ *
+ * **Y nada de esto toca el contraste.** Al contrario: quitar el raster del
+ * login deja el wordmark sobre `tinta` pelada en vez de sobre el JPG con velo, y
+ * `hueso` pasa de 15.08:1 a 15.34:1. El par que hay que auditar en la austera
+ * esta en `tokens.ts` con el numero al lado.
+ *
+ * El atributo lo pone `design/marca.tsx` en el `<html>`, despues de que
+ * `/marca` responda. Antes de que responda, la pagina esta en `gothic`: es el
+ * estado por defecto de `:root` y por lo tanto el primer frame.
+ */
+
+/* (1) La textura de la placa, al 0 %. Se saca el `background-image` entero y
+   no se baja la opacidad: un `opacity: 0` sobre el gradiente lo deja ocupando
+   el mismo lugar en el compositing y, en algunos navegadores, deja el elemento
+   como una capa vacia que todavia captura el pintado. */
+html[data-estetica='austero'] .trama-peltre {
+  background-image: none;
+}
+
+/* (2) El fondo del login sin el raster. Se quita la CADA `url()` y no el
+   `background-image` completo, porque el velo radial es la garantia de contraste
+   del wordmark (§1.1) y tiene que seguir puestos: sin el raster, el wordmark
+   queda sobre `tinta`, y `hueso` da 15.34:1. */
+html[data-estetica='austero'] .fondo-login {
+  background-image:
+    radial-gradient(
+      34rem 46rem at 50% 45%,
+      theme('colors.velo.centro') 0%,
+      theme('colors.velo.meseta') 68%,
+      theme('colors.velo.margen') 88%,
+      theme('colors.velo.borde') 100%
+    );
+}
+
+/* (3) `Malla` y `Grano`, que viven juntos en la superficie del encabezado de
+   `Marco`. Se apagan por `display: none` y no por opacidad porque son dos
+   superficies de pantalla completa con un filtro SVG: bajarlas de opacidad deja
+   el `feTurbulence` recalculando un tile que no se ve. */
+html[data-estetica='austero'] .ornamento-textura {
+  display: none;
 }
 
 /*

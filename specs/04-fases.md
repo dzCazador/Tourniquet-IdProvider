@@ -92,6 +92,32 @@ Se toma lo que el primer contrato real pida; todo lo demás queda documentado co
   listado acá como pendiente, no como supuesto. La lista vigente está en el `README.md` de la
   raíz, en dos tablas: lo que no se implementó, y lo que existe con una limitación conocida.
 
+## Fase 05 — Despliegue en un cliente
+
+La Fase 04 madre, después del endurecimiento: convertir el repositorio en algo que un
+administrador de sistemas del cliente pueda instalar sin ayuda.
+
+- **Runbooks de operación** en `deploy/runbooks/`: `instalacion.md` (de cero a login
+  funcionando), `backup-restore.md` (base de control y master key **por separado**, con el
+  restore **probado**), `rollback.md` (deshacer cada paso) y `emergencia.md` (cómo entra la
+  gente si el IdP está caído). **Entregado** (Fase 10).
+- **Generador de la semilla de cliente**: `npm run generar:instalacion` escribe un
+  `91-semilla-<cliente>.sql` con los dominios, el inventario de base y el tema reales. No abre
+  conexión a ninguna base. **Entregado** (Fase 10).
+- **Guardas de arranque de producción**: `https` del `issuer`, master key de 32 bytes,
+  `DATABASE_URL` fuera de `tourniquet_dev` y `DEBUG` ausente. Las cuatro cortan el proceso con un
+  mensaje que dice qué corregir (`specs/00` §8.2). **Entregado** (Fase 10).
+- **Marca por cliente** (`GET /marca`): el nombre que se ve en la pantalla de ingreso y el tema
+  (`gothic`/`austero`) desde `cat_cliente.politica_json.tema`. El acento es el único token que se
+  sobreescribe en runtime; el resto de la paleta no se mueve. **Entregado** (Fase 10).
+- **Aceptación**: la instalación se ejecutó **completa en una máquina limpia** siguiendo sólo
+  `runbooks/instalacion.md`, sin ayuda; la prueba de humo de 10 puntos pasó entera; el backup
+  existe y **el restore se probó**; el camino `AUTH_MODO=local` se probó **realmente**, con
+  Tourniquet apagado. **Lo que falta de esto está anotado en
+  [`fase-10-despliegue-cliente.md`](todo/begin/fase-10-despliegue-cliente.md) § *Estado*:
+  el código y los procedimientos están escritos y verificados contra `tourniquet_dev`, pero
+  ejecutarlos en la máquina del cliente —y con el cliente mirando— es la fase siguiente.
+
 ## Reglas transversales a todas las fases
 
 1. No se crea ninguna tabla sin actualizar `specs/02` **primero**.

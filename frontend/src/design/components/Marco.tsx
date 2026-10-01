@@ -2,6 +2,8 @@ import type { ReactNode } from 'react';
 import { Anillo } from '../ornaments/Anillo';
 import { Grano } from '../ornaments/Grano';
 import { Malla } from '../ornaments/Malla';
+import { useMarca } from '../marca';
+import { PRODUCTO } from '@/lib/marca';
 
 /**
  * `Marco`: el marco de las pantallas del portal con sesion.
@@ -38,10 +40,21 @@ export function Marco({
   acciones?: ReactNode;
   children: ReactNode;
 }) {
+  const { nombre } = useMarca();
+
   return (
     <div className="relative flex min-h-dvh flex-col">
-      {/* La superficie con textura, detras de todo y sin capturar eventos. */}
-      <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
+      {/*
+        La superficie con textura, detras de todo y sin capturar eventos.
+
+        `ornamento-textura` es la clase que la estetica `austero` apaga
+        (`globals.css`). Va en el contenedor y no en `Malla`/`Grano` por dos
+        motivos: son dos superficies de pantalla completa y apagarlas por
+        `display: none` tiene que ser una regla, no un `if` en JS; y el
+        contenedor es el unico lugar donde se ve que `Malla` y `Grano` son la
+        misma capa y no dos texturas distintas.
+      */}
+      <div aria-hidden className="ornamento-textura pointer-events-none absolute inset-0 overflow-hidden">
         <Malla />
         <Grano />
       </div>
@@ -62,9 +75,15 @@ export function Marco({
               `p`: el `h1` de esta pantalla es el tituto de la vista, y dos `h1` en
               un documento hacen que un lector de pantalla anuncie la pagina dos
               veces.
+
+              Y es el **nombre del cliente**, por el mismo motivo que en `/login`
+              (`estetica-tourniquet.md` §11): el encabezado de cada pantalla es la
+              unica parte del portal que esta presente en todas, y si dice
+              "Tourniquet" el que administra tiene veinte pestanas abiertas y
+              ninguna dice de que empresa es.
             */}
-            <p className="font-wordmark text-2xl tracking-wide text-hueso">Tourniquet</p>
-            <p className="font-interfaz text-menor text-plata">Ingreso unico</p>
+            <p className="truncate font-wordmark text-2xl tracking-wide text-hueso">{nombre}</p>
+            <p className="font-interfaz text-menor text-plata">{PRODUCTO}</p>
           </div>
           {acciones ? <div className="ml-auto flex items-center gap-2">{acciones}</div> : null}
         </div>

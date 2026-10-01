@@ -133,6 +133,19 @@ filas con el mismo hash harían que "usar el código" sea ambiguo); `(idusuario,
 - Semillas: `deploy/sql/90-semilla-*.sql` sólo con catálogo no sensible (clientes, apps); el
   primer usuario administrador se crea con `scripts/bootstrap-admin.mjs` (lee password de
   prompt, hash argon2id, nunca por SQL en texto).
+- **La semilla de una instalación de cliente es un `91-semilla-<cliente>.sql`, y la genera
+  `npm run generar:instalacion`** (Fase 10). `90-` es la de desarrollo y **no** se usa en un
+  cliente: lleva `localhost` en los `redirect_uri` y eso es un destino de códigos de autorización
+  válido para siempre (`specs/01` §9).
+
+  El generador **no abre conexión a ninguna base** y no necesita `TQ_MASTER_KEY`: escribe un
+  archivo y nada más. Con eso queda garantizado que es el único camino por el que se crea un `.sql`
+  nuevo, así que el número, el encabezado y la lista de lo que no va adentro quedan por
+  construcción y no por memoria. El D3 (una instancia por cliente) implica que cada instalación
+  tiene **su** `91-` y van a **bases distintas**: aplicar dos `91-` distintos a la misma base no
+  está prohibido por el motor —el script es idempotente, no acumulativo— pero sí está prohibido
+  por esta spec, y por eso el generador avisa si ya hay otros `91-` en el directorio y el archivo
+  generado lo dice en su encabezado.
 
 ### 5.1 Los dos caminos del esquema (normativo)
 

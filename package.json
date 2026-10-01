@@ -7,6 +7,7 @@
     "build": "npm run build --workspace backend",
     "sql:dev": "node scripts/ejecutar-sql-dev.mjs",
     "generar:clave": "node scripts/generar-clave.mjs",
+    "generar:instalacion": "node scripts/generar-instalacion.mjs",
     "bootstrap:admin": "node scripts/bootstrap-admin.mjs",
     "alta:usuario": "node scripts/alta-usuario.mjs",
     "registrar:base": "node scripts/registrar-base.mjs",

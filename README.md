@@ -40,6 +40,7 @@ limitación conocida.
 | △ | **Logs centralizados / SIEM** | No implementado. `aud_login` es la fuente, y se exporta con el panel o por SQL |
 | △ | **Rate limit distribuido** | No implementado: es **en memoria, una instancia por instalación** (D3 de `specs/00`). Con más de una instancia, el límite real es el de cada una |
 | △ | **Desencripto de credenciales de bases** para el futuro TenantRegistry de RHPro | **Sin diseño.** `GET /registry/bases/:tenant` y `/registry/aplicaciones/:tenant` dan inventario sin credenciales, y ningún endpoint devuelve contraseñas: `specs/00` §4.2 |
+| △ | **Procedimiento de pérdida o compromiso de la master key** | **No está escrito, a propósito.** Es un incidente, no una operación: hay que regenerar claves de firma y recifrar todas las credenciales de bases y todos los secretos de MFA, y hacerlo sin un cliente mirando es como se hace mal. `backup-restore.md` §2 dice por qué no hay atajo |
 
 ### Con limitación conocida
 
@@ -50,6 +51,8 @@ limitación conocida.
 | **Job de "N tokens con `kid` fuera del JWKS"** | **No se puede contar**, y no es una funcionalidad faltante: los access tokens no se persisten. `npm run verificar:rotacion` reporta la cota por fecha (`tokens_en_vuelo`), que es lo único cierto |
 | **Segundo factor en apps** | El claim `amr` ya dice `["pwd","mfa"]`, pero **ninguna app exige un segundo factor para una acción**: leer el `amr` y aplicar una política es trabajo de cada app |
 | **`POST /oidc/token` con `prompt`/`max_age`** | No implementado. No hay *reauthentication* por API: para exigir el segundo factor de nuevo hay que hacer logout y entrar |
+| **Estética `austero`** (Fase 10) | Es **el mismo portal**, con el acento en un azul neutro y la textura al 0 %. El acento por cliente sale de `cat_cliente.politica_json.tema` y es un `#rrggbb`; el resto de la paleta no se puede cambiar por cliente, y es a propósito: son los pares de contraste medidos de `estetica-tourniquet.md` §4 |
+| **`/marca` con más de un cliente activo** | No muestra ninguno y cae a la marca del producto. D3 es una instancia por cliente, así que dos clientes activos en la misma base son una instalación mal hecha: es preferible no mostrar el nombre de ninguno antes que el de uno de los dos |
 
 ## Mapa de specs (normativos)
 
@@ -62,6 +65,8 @@ limitación conocida.
 | `specs/04-fases.md` | Roadmap 01–04 con criterios de aceptación |
 | `specs/todo/begin/` | **Plan de implementación fase por fase** (00 → 11): tareas, SQL, criterios de aceptación y trampas |
 | `specs/todo/begin/estetica-tourniquet.md` | Sistema de diseño del portal: estética gótica (negro, oxblood, placa grabada) y la guía de tono |
+| `deploy/runbooks/` | **Procedimientos de operación**: `instalacion.md`, `backup-restore.md`, `rollback.md`, `emergencia.md`, `jobs-limpieza.md`, `rotacion-claves.md` |
+| `docs/instalacion.md` | Guía de instalación **para el administrador de sistemas del cliente**, no para un desarrollador |
 
 Convenciones del repo para agentes: **`AGENTS.md`**.
 
@@ -115,3 +120,30 @@ corren a mano: `deploy/runbooks/jobs-limpieza.md`.
 `frontend/.env` tiene que traer `NEXT_PUBLIC_API_URL=http://localhost:3001` —el
 build **corta** si falta, porque en un export estático la URL queda incrustada en
 el bundle. Detalle en `specs/todo/begin/README.md`.
+
+## Instalar en un cliente
+
+La instalación de una instancia nueva es un procedimiento escrito, no una tarea
+implícita. Todo lo que hace falta está en `deploy/runbooks/`:
+
+| Runbook | Qué resuelve |
+|---|---|
+| **`instalacion.md`** | De cero a login funcionando: servicio de Windows, `.env`, esquema, semilla del cliente, credencial cifrada, primer admin, portal, prueba de humo de 10 puntos |
+| **`backup-restore.md`** | Backup de la base de control y **de la master key por separado**, y el restore **probado** |
+| **`rollback.md`** | Cómo volver atrás de cada paso, con `AUTH_MODO=local` como red de seguridad |
+| **`emergencia.md`** | Cómo entra la gente a trabajar si Tourniquet está caído, y quién tiene las credenciales |
+| `jobs-limpieza.md` | Los cuatro jobs de retención, en SQL Agent o en el Planificador de tareas |
+| `rotacion-claves.md` | Rotación de las claves de firma, con ventana de solapamiento y rollback |
+
+`docs/instalacion.md` es la versión corta, en orden de ejecución, para el
+**administrador de sistemas del cliente**.
+
+Para generar la semilla de un cliente:
+
+```bash
+npm run generar:instalacion    # escribe deploy/sql/91-semilla-<cliente>.sql
+```
+
+**Nunca** se usa `90-semilla-catalogo.sql` en una instalación real: lleva
+`localhost` en los `redirect_uri` y eso es un destino de códigos de autorización
+válido para siempre (`specs/01` §9).
